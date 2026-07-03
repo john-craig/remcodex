@@ -125,6 +125,31 @@ export function sendMessage(sessionId, payload) {
   });
 }
 
+export async function sendVoiceMessage(sessionId, audioBlob, options = {}) {
+  const headers = {};
+  if (options.mimeType) {
+    headers["Content-Type"] = options.mimeType;
+  }
+  if (options.filename) {
+    headers["X-Filename"] = options.filename;
+  }
+  if (options.modelId) {
+    headers["X-Codex-Model"] = options.modelId;
+  }
+  if (options.reasoningEffort) {
+    headers["X-Codex-Reasoning"] = options.reasoningEffort;
+  }
+  if (options.profile) {
+    headers["X-Codex-Profile"] = options.profile;
+  }
+
+  return request(`/api/sessions/${sessionId}/messages/voice`, {
+    method: "POST",
+    headers,
+    body: audioBlob,
+  });
+}
+
 export function stopSession(sessionId) {
   return request(`/api/sessions/${sessionId}/stop`, {
     method: "POST",

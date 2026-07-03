@@ -2079,6 +2079,13 @@ button:hover {
   gap: 0.28rem;
 }
 
+.composer-action-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.34rem;
+}
+
 .toolbar-env {
   flex: 0 0 auto;
   max-width: 8.75rem;
@@ -2189,12 +2196,68 @@ button:hover {
   transform: scale(0.97);
 }
 
+.composer-action-fab--voice {
+  background: rgba(188, 90, 48, 0.12);
+  color: var(--accent-strong);
+  border: 1px solid rgba(188, 90, 48, 0.18);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+}
+
+.composer-action-fab--voice:hover:not(:disabled) {
+  transform: scale(1.04);
+  background: rgba(188, 90, 48, 0.16);
+}
+
+.composer-action-fab--voice:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.composer-action-fab--voice:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.composer-action-fab--voice-recording {
+  background: linear-gradient(145deg, #9a2e22, #d4533f);
+  color: #fff7f4;
+  border-color: transparent;
+  box-shadow: 0 0 0 0 rgba(196, 71, 56, 0.35);
+  animation: composer-voice-pulse 1.3s ease-out infinite;
+}
+
+.composer-action-fab--voice-transcribing {
+  background: linear-gradient(145deg, #3a332a, #5b5043);
+  color: #fffaf4;
+  border-color: transparent;
+}
+
 .composer-action-icon {
   display: block;
   width: 0.82rem;
   height: 0.82rem;
   margin-left: 1px;
   margin-top: 1px;
+}
+
+.composer-action-icon--voice {
+  margin-left: 0;
+  margin-top: 0;
+}
+
+@keyframes composer-voice-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(196, 71, 56, 0.38);
+  }
+
+  70% {
+    box-shadow: 0 0 0 0.42rem rgba(196, 71, 56, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(196, 71, 56, 0);
+  }
 }
 
 .input-popover {

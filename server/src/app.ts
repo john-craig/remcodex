@@ -15,6 +15,7 @@ import { EventStore } from "./services/event-store";
 import { CodexRolloutSyncService } from "./services/codex-rollout-sync";
 import { ProjectManager } from "./services/project-manager";
 import { SessionManager } from "./services/session-manager";
+import { SpeechToTextService } from "./services/speech-to-text";
 import { SessionTimelineService } from "./services/session-timeline-service";
 import type { CodexExecutionMode } from "./services/codex-runner";
 import { resolveDefaultDatabasePath, resolvePackageRoot } from "./utils/runtime-paths";
@@ -77,6 +78,10 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
   const sessionTimeline = new SessionTimelineService(eventStore);
   const projectManager = new ProjectManager(db, projectRootsEnv, repoRoot);
   const codexRolloutSync = new CodexRolloutSyncService(db);
+  const speechToText = new SpeechToTextService({
+    preferredBinary: process.env.REMCODEX_STT_BINARY,
+    modelPath: process.env.REMCODEX_STT_MODEL_PATH,
+  });
   const sessionManager = new SessionManager({
     db,
     eventStore,
@@ -121,7 +126,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
       sessionTimeline,
     ),
   );
-  app.use("/api/sessions/:sessionId/messages", createMessageRouter(sessionManager));
+  app.use("/api/sessions/:sessionId/messages", createMessageRouter(sessionManager, speechToText));
 
   const webRoot = path.join(repoRoot, "web");
   app.use(express.static(webRoot));

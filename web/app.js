@@ -17,6 +17,7 @@ import {
   resolveSessionApproval,
   retrySessionApproval,
   sendMessage,
+  sendVoiceMessage,
   stopSession,
   syncImportedSession,
 } from "./api.js";
@@ -70,6 +71,10 @@ const INITIAL_DETAIL_MAX_PAGES = 5;
 const DETAIL_RENDER_BATCH_MS = 0;
 let lastToastMessage = "";
 let lastToastAt = 0;
+let activeVoiceRecorder = null;
+let activeVoiceStream = null;
+let activeVoiceChunks = [];
+let activeVoiceMimeType = "";
 const GENERIC_SESSION_TITLES = new Set([
   "未命名会话",
   "新会话",
@@ -92,6 +97,44 @@ const DEFAULT_DETAIL_VIEW = {
   autoScroll: true,
   rawStdoutBuckets: {},
 };
+
+function browserSupportsVoiceRecording() {
+  return Boolean(window.MediaRecorder && navigator.mediaDevices?.getUserMedia);
+}
+
+function getPreferredVoiceMimeType() {
+  if (!window.MediaRecorder?.isTypeSupported) {
+    return "";
+  }
+
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+    "audio/ogg",
+  ];
+  return candidates.find((candidate) => window.MediaRecorder.isTypeSupported(candidate)) || "";
+}
+
+function stopActiveVoiceStream() {
+  if (activeVoiceStream?.getTracks) {
+    activeVoiceStream.getTracks().forEach((track) => {
+      try {
+        track.stop();
+      } catch {
+        /* ignore */
+      }
+    });
+  }
+  activeVoiceStream = null;
+}
+
+function resetVoiceCaptureState() {
+  activeVoiceRecorder = null;
+  activeVoiceChunks = [];
+  activeVoiceMimeType = "";
+  stopActiveVoiceStream();
+}
 
 function renderAppChrome({
   variant,
@@ -1409,6 +1452,8 @@ const state = {
     liveResumeTimerId: 0,
     importedSyncTimerId: 0,
     composerEnvironmentMenuOpen: false,
+    voiceRecording: false,
+    voiceTranscribing: false,
     slashMenuOpen: false,
     slashCommands: [],
     slashCommandsLoading: false,
@@ -1442,6 +1487,7 @@ window.addEventListener("pageshow", () => {
 
 function renderRoute() {
   state.detail.loadRequestId = Number(state.detail.loadRequestId || 0) + 1;
+  resetVoiceCaptureState();
   cleanupSocket();
   cleanupDetailClock();
   cleanupLiveResumeSync();
@@ -1465,6 +1511,8 @@ function renderRoute() {
       ...state.detail,
       ...DEFAULT_DETAIL_VIEW,
       optimisticSend: null,
+      voiceRecording: false,
+      voiceTranscribing: false,
     };
   }
 
@@ -3448,7 +3496,10 @@ function renderSessionDetail() {
   if (
     composerSlot &&
     (!shellMounted || state.detail.lastComposerHtml !== composerInputHtml) &&
-    (!shellMounted || !composerFocused)
+    (!shellMounted ||
+      !composerFocused ||
+      state.detail.voiceRecording ||
+      state.detail.voiceTranscribing)
   ) {
     composerSlot.innerHTML = composerInputHtml;
     state.detail.lastComposerHtml = composerInputHtml;
@@ -3457,6 +3508,7 @@ function renderSessionDetail() {
   const composerTextarea = document.querySelector('textarea[name="content"]');
   const messageFormEl = document.querySelector("#message-form");
   const composerActionFab = document.querySelector("#composer-action");
+  const composerVoiceFab = document.querySelector("#composer-voice-action");
 
   function syncComposerActionState() {
     if (!composerActionFab || !composerTextarea) {
@@ -3465,15 +3517,23 @@ function renderSessionDetail() {
 
     if (composerIsBusy) {
       composerActionFab.disabled = false;
-      return;
+    } else {
+      composerActionFab.disabled =
+        state.detail.voiceRecording ||
+        state.detail.voiceTranscribing ||
+        !composerTextarea.value.trim();
     }
 
-    composerActionFab.disabled = !composerTextarea.value.trim();
+    if (composerVoiceFab) {
+      composerVoiceFab.disabled = composerIsBusy || state.detail.voiceTranscribing;
+    }
   }
 
-  async function sendComposerMessage() {
-    const content = String(composerTextarea?.value || "").trim();
-    if (!content) {
+  async function submitPromptContent(content, submitRequest, options = {}) {
+    const promptText = String(content || "").trim();
+    const clearDraft = options.clearDraft !== false;
+    const restoreDraftOnError = options.restoreDraftOnError !== false;
+    if (!promptText) {
       return;
     }
 
@@ -3483,7 +3543,7 @@ function renderSessionDetail() {
       tempTurnId: `optimistic-turn:${Date.now()}`,
       userItemId: `optimistic-user:${Date.now()}`,
       thinkingItemId: `optimistic-thinking:${Date.now()}`,
-      text: content,
+      text: promptText,
       createdAt: optimisticTimestamp,
       confirmed: false,
       turnId: null,
@@ -3495,13 +3555,8 @@ function renderSessionDetail() {
     };
 
     try {
-      const codex = buildCodexLaunchPayload(
-        state.detail.codexLaunch,
-        state.detail.codexUiOptions,
-      );
-      const payload = codex ? { content, codex } : { content };
       if (state.detail.session && shouldAutotitleSession(state.detail.session)) {
-        const nextTitle = deriveSessionTitleFromMessage(content);
+        const nextTitle = deriveSessionTitleFromMessage(promptText);
         state.detail.session.title = nextTitle;
         state.sessions.items = state.sessions.items.map((item) =>
           item.sessionId === session.sessionId ? { ...item, title: nextTitle } : item,
@@ -3514,8 +3569,10 @@ function renderSessionDetail() {
         state.detail.session.updatedAt = optimisticTimestamp;
       }
       state.detail.optimisticSend = optimisticSend;
-      state.detail.draft = "";
-      if (composerTextarea) {
+      if (clearDraft) {
+        state.detail.draft = "";
+      }
+      if (clearDraft && composerTextarea) {
         composerTextarea.value = "";
         adjustComposerHeight(composerTextarea);
         window.requestAnimationFrame(() => adjustComposerHeight(composerTextarea));
@@ -3523,7 +3580,7 @@ function renderSessionDetail() {
       syncComposerActionState();
       scheduleSessionDetailRender();
 
-      const result = await sendMessage(session.sessionId, payload);
+      const result = await submitRequest();
       if (state.detail.optimisticSend?.userItemId === optimisticSend.userItemId) {
         state.detail.optimisticSend = {
           ...state.detail.optimisticSend,
@@ -3540,7 +3597,7 @@ function renderSessionDetail() {
           type: "message.user",
           turnId: result.turnId,
           payload: {
-            text: content,
+            text: promptText,
           },
         },
       ]);
@@ -3548,13 +3605,111 @@ function renderSessionDetail() {
       scheduleSessionDetailRender();
     } catch (error) {
       clearOptimisticSend({
-        restoreDraft: content,
+        restoreDraft: restoreDraftOnError ? promptText : "",
         restoreSession: true,
         restoreTitle: true,
       });
       syncComposerActionState();
       scheduleSessionDetailRender();
       void resumeActiveSessionDetail("send-error");
+      showToast(messageOf(error));
+    }
+  }
+
+  async function sendComposerMessage() {
+    const content = String(composerTextarea?.value || "").trim();
+    const codex = buildCodexLaunchPayload(
+      state.detail.codexLaunch,
+      state.detail.codexUiOptions,
+    );
+    const payload = codex ? { content, codex } : { content };
+    await submitPromptContent(content, () => sendMessage(session.sessionId, payload));
+  }
+
+  async function startVoiceRecording() {
+    if (!browserSupportsVoiceRecording()) {
+      showToast(t("composer.voice.unsupported"));
+      return;
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = getPreferredVoiceMimeType();
+    const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    activeVoiceRecorder = recorder;
+    activeVoiceStream = stream;
+    activeVoiceChunks = [];
+    activeVoiceMimeType = recorder.mimeType || mimeType || "audio/webm";
+
+    recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) {
+        activeVoiceChunks.push(event.data);
+      }
+    };
+    recorder.onstop = () => {
+      stopActiveVoiceStream();
+    };
+    recorder.start();
+    state.detail.voiceRecording = true;
+    state.detail.voiceTranscribing = false;
+    syncComposerActionState();
+    scheduleSessionDetailRender();
+  }
+
+  async function stopVoiceRecordingAndSubmit() {
+    const recorder = activeVoiceRecorder;
+    if (!recorder) {
+      state.detail.voiceRecording = false;
+      syncComposerActionState();
+      scheduleSessionDetailRender();
+      return;
+    }
+
+    const chunks = await new Promise((resolve, reject) => {
+      recorder.addEventListener(
+        "stop",
+        () => resolve([...activeVoiceChunks]),
+        { once: true },
+      );
+      recorder.addEventListener(
+        "error",
+        (event) => reject(event.error || new Error("Voice recording failed.")),
+        { once: true },
+      );
+      recorder.stop();
+    });
+
+    const mimeType = activeVoiceMimeType || recorder.mimeType || "audio/webm";
+    resetVoiceCaptureState();
+    state.detail.voiceRecording = false;
+    state.detail.voiceTranscribing = true;
+    syncComposerActionState();
+    scheduleSessionDetailRender();
+
+    try {
+      const blob = new Blob(chunks, { type: mimeType });
+      const codex = buildCodexLaunchPayload(
+        state.detail.codexLaunch,
+        state.detail.codexUiOptions,
+      );
+      const result = await sendVoiceMessage(session.sessionId, blob, {
+        mimeType,
+        filename: `voice-note${mimeType.includes("ogg") ? ".ogg" : mimeType.includes("wav") ? ".wav" : ".webm"}`,
+        modelId: codex?.model,
+        reasoningEffort: codex?.reasoningEffort,
+        profile: codex?.profile,
+      });
+      state.detail.voiceTranscribing = false;
+      syncComposerActionState();
+      scheduleSessionDetailRender();
+      await submitPromptContent(
+        result.transcript,
+        () => Promise.resolve(result),
+        { clearDraft: false, restoreDraftOnError: false },
+      );
+    } catch (error) {
+      state.detail.voiceTranscribing = false;
+      syncComposerActionState();
+      scheduleSessionDetailRender();
       showToast(messageOf(error));
     }
   }
@@ -3590,6 +3745,9 @@ function renderSessionDetail() {
       }
 
       event.preventDefault();
+      if (state.detail.voiceRecording || state.detail.voiceTranscribing) {
+        return;
+      }
       if (await refreshBusySessionBeforeSend()) {
         return;
       }
@@ -3613,13 +3771,44 @@ function renderSessionDetail() {
         return;
       }
 
+      if (state.detail.voiceRecording || state.detail.voiceTranscribing) {
+        return;
+      }
+
       await sendComposerMessage();
+    };
+  }
+
+  if (composerVoiceFab) {
+    composerVoiceFab.onclick = async () => {
+      if (state.detail.voiceTranscribing) {
+        return;
+      }
+
+      try {
+        if (state.detail.voiceRecording) {
+          await stopVoiceRecordingAndSubmit();
+          return;
+        }
+
+        await startVoiceRecording();
+      } catch (error) {
+        resetVoiceCaptureState();
+        state.detail.voiceRecording = false;
+        state.detail.voiceTranscribing = false;
+        syncComposerActionState();
+        scheduleSessionDetailRender();
+        showToast(messageOf(error));
+      }
     };
   }
 
   if (messageFormEl) {
     messageFormEl.onsubmit = async (event) => {
       event.preventDefault();
+      if (state.detail.voiceRecording || state.detail.voiceTranscribing) {
+        return;
+      }
       if (await refreshBusySessionBeforeSend()) {
         return;
       }

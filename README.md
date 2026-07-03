@@ -72,6 +72,7 @@ RemCodex fixes that.
 - Human-in-the-loop command approval
 - Multi-device access to the same live session
 - Resume after refresh, sleep, or reconnect
+- Voice-note prompt capture with local transcription
 - Browser-based UI — **no extra client required**
 - Works with Codex CLI
 
@@ -95,6 +96,12 @@ Access from another device:
 http://<your-ip>:18840
 
 > Runs entirely on your local machine. No cloud, no data upload.
+
+Nix users can run the packaged server directly:
+
+```bash
+nix run .#
+```
 
 ---
 
@@ -140,6 +147,7 @@ Instead of raw terminal logs, you get a structured, visual timeline you can foll
 - Left sidebar for session navigation
 - Right-side execution timeline
 - Fixed input composer
+- Optional voice-note capture button under send
 - Semantic timeline rendering for:
     - user messages
     - assistant output
@@ -200,6 +208,46 @@ Default port: **18840**
 
 ```bash
 PORT=18841 npx remcodex
+```
+
+The flake default package wraps `remcodex` with:
+
+- Node.js 20
+- `whisper-ctranslate2`
+- `ffmpeg`
+- a bundled tiny English Whisper model exposed through `REMCODEX_STT_MODEL_PATH`
+
+Examples:
+
+```bash
+nix build .#
+./result/bin/remcodex doctor
+./result/bin/remcodex stt-self-test
+
+nix develop
+remcodex start
+```
+
+Voice-note transcription is optional and stays local. RemCodex will look for a whisper CLI on the server machine in this order:
+
+- `whisper`
+- `whisper.cpp`
+- `whisper-ctranslate2`
+
+You can override that detection with:
+
+```bash
+REMCODEX_STT_BINARY=/path/to/whisper \
+REMCODEX_STT_MODEL_PATH=/path/to/model \
+npx remcodex
+```
+
+When voice transcription is available, the composer shows a microphone button below send. Click once to record, click again to stop, transcribe, and submit the transcript as a normal user prompt in the timeline.
+
+To validate the local transcription wiring without opening the browser:
+
+```bash
+remcodex stt-self-test
 ```
 
 ---
