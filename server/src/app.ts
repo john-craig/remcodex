@@ -8,6 +8,7 @@ import { createCodexOptionsRouter } from "./controllers/codex-options.controller
 import { createMessageRouter } from "./controllers/message.controller";
 import { createProjectRouter } from "./controllers/project.controller";
 import { createSessionRouter } from "./controllers/session.controller";
+import { handleRemCodexMcpRequest } from "./mcp";
 import { createDatabase } from "./db/client";
 import { runMigrations } from "./db/migrations";
 import { registerSessionGateway } from "./gateways/ws.gateway";
@@ -30,6 +31,11 @@ export interface RemCodexServerOptions {
   codexCommand?: string;
   codexMode?: CodexExecutionMode;
   logStartup?: boolean;
+}
+
+function resolveMcpApiToken(): string | null {
+  const token = process.env.REMCODEX_MCP_API_TOKEN?.trim() || "";
+  return token.length > 0 ? token : null;
 }
 
 export interface StartedRemCodexServer {
@@ -89,6 +95,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
     codexCommand,
     codexMode,
   });
+  const mcpApiToken = resolveMcpApiToken();
 
   const app = express();
   const server = http.createServer(app);
@@ -127,6 +134,34 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
     ),
   );
   app.use("/api/sessions/:sessionId/messages", createMessageRouter(sessionManager, speechToText));
+  if (mcpApiToken) {
+    app.all("/mcp", async (request, response, next) => {
+      try {
+        await handleRemCodexMcpRequest(
+          request,
+          response,
+          {
+            eventStore,
+            projectManager,
+            sessionManager,
+            sessionTimeline,
+            codexRolloutSync,
+          },
+          {
+            apiToken: mcpApiToken,
+          },
+        );
+      } catch (error) {
+        next(error);
+      }
+    });
+  } else {
+    app.all("/mcp", (_request, response) => {
+      response.status(404).json({
+        error: "MCP is disabled. Set REMCODEX_MCP_API_TOKEN to enable it.",
+      });
+    });
+  }
 
   const webRoot = path.join(repoRoot, "web");
   app.use(express.static(webRoot));

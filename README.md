@@ -210,6 +210,21 @@ Default port: **18840**
 PORT=18841 npx remcodex
 ```
 
+The MCP endpoint lives at `POST /mcp`. If `REMCODEX_MCP_API_TOKEN` is set at
+startup, the server will require the matching bearer token on every MCP
+request. If it is not set, MCP stays disabled and the rest of RemCodex still
+starts normally:
+
+```bash
+REMCODEX_MCP_API_TOKEN=secret npx remcodex
+```
+
+Clients must send:
+
+```bash
+Authorization: Bearer secret
+```
+
 The flake default package wraps `remcodex` with:
 
 - Node.js 20
@@ -238,6 +253,12 @@ Run it with:
 
 ```bash
 nix build .#checks.x86_64-linux.remcodex-debug-output
+```
+
+The package also includes a smoke test for the MCP auth gate:
+
+```bash
+npm run smoke:mcp-auth
 ```
 
 Voice-note transcription is optional and stays local. RemCodex will look for a whisper CLI on the server machine in this order:
