@@ -69,6 +69,7 @@ const INITIAL_DETAIL_EVENT_PAGE_LIMIT = 200;
 const INITIAL_DETAIL_MIN_TURNS = 4;
 const INITIAL_DETAIL_MAX_PAGES = 5;
 const DETAIL_RENDER_BATCH_MS = 0;
+const CLIENT_DEBUG_LOG_LIMIT = 120;
 let lastToastMessage = "";
 let lastToastAt = 0;
 let activeVoiceRecorder = null;
@@ -96,6 +97,7 @@ const DEFAULT_DETAIL_VIEW = {
   search: "",
   autoScroll: true,
   rawStdoutBuckets: {},
+  clientLogs: [],
 };
 
 function browserSupportsVoiceRecording() {
@@ -114,6 +116,48 @@ function getPreferredVoiceMimeType() {
     "audio/ogg",
   ];
   return candidates.find((candidate) => window.MediaRecorder.isTypeSupported(candidate)) || "";
+}
+
+function formatClientLogDetails(details) {
+  if (details == null) {
+    return "";
+  }
+
+  if (typeof details === "string") {
+    return details;
+  }
+
+  if (details instanceof Error) {
+    return details.stack || `${details.name}: ${details.message}`;
+  }
+
+  try {
+    return JSON.stringify(details, null, 2);
+  } catch (_error) {
+    return String(details);
+  }
+}
+
+function pushClientDebugLog(level, message, details) {
+  const normalizedLevel = ["debug", "info", "warn", "error"].includes(level) ? level : "info";
+  const entry = {
+    ts: Date.now(),
+    level: normalizedLevel,
+    message: String(message || ""),
+    details: details ?? null,
+  };
+
+  state.detail.clientLogs = [...(state.detail.clientLogs || []), entry].slice(-CLIENT_DEBUG_LOG_LIMIT);
+
+  const consoleMethod = typeof console[normalizedLevel] === "function" ? console[normalizedLevel] : console.log;
+  const prefix = `[remcodex] ${entry.message}`;
+  if (entry.details == null) {
+    consoleMethod.call(console, prefix);
+  } else {
+    consoleMethod.call(console, prefix, entry.details);
+  }
+
+  return entry;
 }
 
 function stopActiveVoiceStream() {
@@ -812,6 +856,17 @@ function mergeDetailTimelineRawEvents(nextRawEvents) {
     return;
   }
 
+  pushClientDebugLog("debug", "Merging timeline events", {
+    sessionId: activeSessionId,
+    incomingCount: nextRawEvents.length,
+    appendedCount: appended.length,
+    incremental: canApplyIncrementally,
+    seqRange: {
+      first: appended[0]?.seq || 0,
+      last: appended[appended.length - 1]?.seq || 0,
+    },
+  });
+
   state.detail.rawEvents = [...state.detail.rawEvents, ...appended].sort(
     (a, b) => (a.seq || 0) - (b.seq || 0),
   );
@@ -847,37 +902,61 @@ async function catchUpSessionEvents(sessionId, afterSeq) {
     return;
   }
 
-  for (let page = 0; page < 10; page += 1) {
-    if (!isActiveDetailSession(normalizedSessionId)) {
-      return;
-    }
+  pushClientDebugLog("debug", "Catching up session events", {
+    sessionId: normalizedSessionId,
+    afterSeq: nextAfter,
+  });
+  try {
+    for (let page = 0; page < 10; page += 1) {
+      if (!isActiveDetailSession(normalizedSessionId)) {
+        return;
+      }
 
-    const payload = await getSessionEvents(normalizedSessionId, {
-      after: nextAfter,
-      limit: 200,
+      const payload = await getSessionEvents(normalizedSessionId, {
+        after: nextAfter,
+        limit: 200,
+      });
+      if (!isActiveDetailSession(normalizedSessionId)) {
+        return;
+      }
+
+      const items = Array.isArray(payload?.items)
+        ? payload.items.filter((item) => {
+            const eventSessionId = String(item?.sessionId || item?.session_id || "").trim();
+            return !eventSessionId || eventSessionId === normalizedSessionId;
+          })
+        : [];
+      if (items.length === 0) {
+        pushClientDebugLog("debug", "Catch-up returned no new events", {
+          sessionId: normalizedSessionId,
+          page,
+          afterSeq: nextAfter,
+        });
+        return;
+      }
+
+      trackUnseenEvents(items);
+      mergeDetailTimelineRawEvents(items);
+      nextAfter = Number(payload?.nextCursor || nextAfter);
+      state.detail.cursor = Math.max(state.detail.cursor, nextAfter);
+      pushClientDebugLog("debug", "Catch-up applied events", {
+        sessionId: normalizedSessionId,
+        page,
+        appliedCount: items.length,
+        nextCursor: nextAfter,
+      });
+
+      if (items.length < 200) {
+        return;
+      }
+    }
+  } catch (error) {
+    pushClientDebugLog("warn", "Catch-up failed", {
+      sessionId: normalizedSessionId,
+      afterSeq: nextAfter,
+      error: messageOf(error),
     });
-    if (!isActiveDetailSession(normalizedSessionId)) {
-      return;
-    }
-
-    const items = Array.isArray(payload?.items)
-      ? payload.items.filter((item) => {
-          const eventSessionId = String(item?.sessionId || item?.session_id || "").trim();
-          return !eventSessionId || eventSessionId === normalizedSessionId;
-        })
-      : [];
-    if (items.length === 0) {
-      return;
-    }
-
-    trackUnseenEvents(items);
-    mergeDetailTimelineRawEvents(items);
-    nextAfter = Number(payload?.nextCursor || nextAfter);
-    state.detail.cursor = Math.max(state.detail.cursor, nextAfter);
-
-    if (items.length < 200) {
-      return;
-    }
+    throw error;
   }
 }
 
@@ -3177,11 +3256,17 @@ async function renderSessionDetailPage(sessionId) {
   const previousSessionId = String(state.detail.session?.sessionId || "").trim();
   if (previousSessionId !== normalizedSessionId) {
     state.detail.dismissedApprovalKeys = {};
+    state.detail.clientLogs = [];
   }
 
   state.workspace.activeSessionId = normalizedSessionId;
   const loadRequestId = Number(state.detail.loadRequestId || 0) + 1;
   state.detail.loadRequestId = loadRequestId;
+  pushClientDebugLog("info", "Opening session detail", {
+    sessionId: normalizedSessionId,
+    previousSessionId,
+    loadRequestId,
+  });
   const isStaleDetailLoad = () =>
     state.detail.loadRequestId !== loadRequestId || state.workspace.activeSessionId !== normalizedSessionId;
   const mainSlot = document.querySelector("#workspace-main-slot");
@@ -3213,6 +3298,13 @@ async function renderSessionDetailPage(sessionId) {
     if (isStaleDetailLoad()) {
       return;
     }
+    pushClientDebugLog("info", "Loaded session snapshot", {
+      sessionId: normalizedSessionId,
+      eventCount: Array.isArray(eventData.items) ? eventData.items.length : 0,
+      beforeCursor: Number(eventData.beforeCursor || 0),
+      lastSeq: Number(eventData.lastSeq || eventData.nextCursor || 0),
+      hasMoreBefore: Boolean(eventData.hasMoreBefore),
+    });
 
     const uiOptions =
       uiOptionsResult &&
@@ -3276,6 +3368,12 @@ async function renderSessionDetailPage(sessionId) {
     state.detail.codexQuota = readCachedCodexQuota(normalizedSessionId);
     state.detail.codexStatus = codexStatus;
     state.socketState = "connecting";
+    pushClientDebugLog("debug", "Prepared session detail state", {
+      sessionId: normalizedSessionId,
+      socketState: state.socketState,
+      autoScroll: state.detail.autoScroll,
+      remoteHosts: state.detail.remoteHosts.length,
+    });
 
     const detailQuery = parseHashRoute(window.location.hash || "").query || "";
     const followParam = new URLSearchParams(detailQuery).get("follow");
@@ -3298,6 +3396,10 @@ async function renderSessionDetailPage(sessionId) {
       .catch(() => null);
     scheduleImportedSessionSync(normalizedSessionId);
   } catch (error) {
+    pushClientDebugLog("error", "Failed to load session detail", {
+      sessionId: normalizedSessionId,
+      error: messageOf(error),
+    });
     if (isStaleDetailLoad()) {
       return;
     }
@@ -3537,6 +3639,11 @@ function renderSessionDetail() {
       return;
     }
 
+    pushClientDebugLog("info", "Submitting prompt", {
+      sessionId: session.sessionId,
+      promptLength: promptText.length,
+      clearDraft,
+    });
     const optimisticTimestamp = new Date().toISOString();
     const optimisticSend = {
       sessionId: session.sessionId,
@@ -3581,6 +3688,12 @@ function renderSessionDetail() {
       scheduleSessionDetailRender();
 
       const result = await submitRequest();
+      pushClientDebugLog("info", "Prompt submission acknowledged", {
+        sessionId: session.sessionId,
+        eventId: result.eventId || "",
+        seq: Number(result.seq || 0),
+        turnId: result.turnId || "",
+      });
       if (state.detail.optimisticSend?.userItemId === optimisticSend.userItemId) {
         state.detail.optimisticSend = {
           ...state.detail.optimisticSend,
@@ -3604,6 +3717,10 @@ function renderSessionDetail() {
       state.detail.cursor = Math.max(state.detail.cursor, Number(result.seq || 0));
       scheduleSessionDetailRender();
     } catch (error) {
+      pushClientDebugLog("error", "Prompt submission failed", {
+        sessionId: session.sessionId,
+        error: messageOf(error),
+      });
       clearOptimisticSend({
         restoreDraft: restoreDraftOnError ? promptText : "",
         restoreSession: true,
@@ -3623,6 +3740,11 @@ function renderSessionDetail() {
       state.detail.codexUiOptions,
     );
     const payload = codex ? { content, codex } : { content };
+    pushClientDebugLog("debug", "Dispatching composer message", {
+      sessionId: session.sessionId,
+      contentLength: content.length,
+      hasCodexOverrides: Boolean(codex),
+    });
     await submitPromptContent(content, () => sendMessage(session.sessionId, payload));
   }
 
@@ -3719,6 +3841,10 @@ function renderSessionDetail() {
       return false;
     }
 
+    pushClientDebugLog("debug", "Refreshing busy session before send", {
+      sessionId: state.detail.session?.sessionId || session.sessionId,
+      socketState: state.socketState,
+    });
     await resumeActiveSessionDetail("pre-send");
     return isSessionLiveBusy(state.detail.session);
   }
@@ -3976,12 +4102,22 @@ function attachSessionSocket(sessionId) {
   }
 
   cleanupSocket();
+  pushClientDebugLog("debug", "Connecting session socket", {
+    sessionId: normalizedSessionId,
+  });
   const socket = connectSessionSocket(normalizedSessionId, {
+    onLog(entry) {
+      pushClientDebugLog(entry.level, entry.message, entry.details);
+    },
     onStateChange(nextState) {
       if (state.ws !== socket || !isActiveDetailSession(normalizedSessionId)) {
         return;
       }
 
+      pushClientDebugLog("debug", "Session socket state changed", {
+        sessionId: normalizedSessionId,
+        state: nextState,
+      });
       state.socketState = nextState;
       if (state.detail.session) {
         scheduleSessionDetailRender();
@@ -3997,6 +4133,13 @@ function attachSessionSocket(sessionId) {
         return;
       }
 
+      pushClientDebugLog("debug", "Session socket event received", {
+        sessionId: normalizedSessionId,
+        eventType: event.type || "",
+        seq: Number(event.seq || 0),
+        turnId: event.turnId || "",
+        status: event.status || "",
+      });
       if (state.detail.session) {
         state.detail.session.updatedAt = new Date().toISOString();
         if (event.type === "turn.started") {
@@ -4675,6 +4818,37 @@ function renderRawEventList(events) {
   `;
 }
 
+function renderClientLogList(logs) {
+  const items = Array.isArray(logs) ? [...logs].slice(-80).reverse() : [];
+  if (items.length === 0) {
+    return `<div class="inspect-empty">No client logs yet.</div>`;
+  }
+
+  return `
+    <div class="inspect-raw-list">
+      ${items
+        .map((entry) => {
+          const details = formatClientLogDetails(entry.details);
+          return `
+            <div class="inspect-raw-item">
+              <div class="inspect-raw-head">
+                <span class="inspect-raw-kind">${escapeHtml(String(entry.level || "info"))}</span>
+                <span class="inspect-raw-ts">${escapeHtml(entry.ts ? formatTs(Math.floor(entry.ts / 1000)) : "—")}</span>
+              </div>
+              <p class="inspect-raw-summary">${escapeHtml(entry.message || "—")}</p>
+              ${
+                details
+                  ? `<pre class="inspect-raw-summary">${escapeHtml(shortenText(details, 1200))}</pre>`
+                  : ""
+              }
+            </div>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
 function formatRuntimeValue(value, fallback = t("generic.notSynced")) {
   const text = typeof value === "string" ? value.trim() : "";
   return text || fallback;
@@ -4866,6 +5040,10 @@ function renderInspectSessionSection(session) {
           ${escapeHtml(t("inspect.autoScroll", { value: t(state.detail.autoScroll ? "generic.on" : "generic.off") }))}
         </button>
       </div>
+      <details class="inspect-raw-details">
+        <summary class="inspect-raw-summary-toggle">${escapeHtml("Client logs")}</summary>
+        ${renderClientLogList(state.detail.clientLogs)}
+      </details>
       <details class="inspect-raw-details">
         <summary class="inspect-raw-summary-toggle">${escapeHtml(t("inspect.rawEventsDebug"))}</summary>
         ${renderRawEventList(state.detail.rawEvents)}
@@ -8042,6 +8220,11 @@ async function maybeLoadOlderSessionEvents(sessionId, list) {
     });
   } catch (error) {
     state.detail.historyLoading = false;
+    pushClientDebugLog("warn", "Failed to load older session events", {
+      sessionId,
+      beforeCursor: state.detail.beforeCursor,
+      error: messageOf(error),
+    });
     showToast(messageOf(error));
   }
 }
@@ -8142,12 +8325,22 @@ async function resumeActiveSessionDetail(reason = "resume") {
 
   state.detail.resumeSyncInFlight = true;
   state.detail.lastResumeSyncAt = now;
+  pushClientDebugLog("debug", "Resuming active session detail", {
+    sessionId,
+    reason,
+    socketState: state.socketState,
+  });
 
   try {
     const shouldForceReconnect =
       reason === "visibility" || reason === "focus" || reason === "pageshow";
 
     if (shouldForceReconnect || state.socketState === "closed" || state.socketState === "error") {
+      pushClientDebugLog("debug", "Reconnecting session socket during resume", {
+        sessionId,
+        reason,
+        previousSocketState: state.socketState,
+      });
       cleanupSocket();
       state.socketState = "connecting";
       attachSessionSocket(sessionId);
@@ -8170,6 +8363,17 @@ async function resumeActiveSessionDetail(reason = "resume") {
       scheduleSessionDetailRender();
       scheduleImportedSessionSync(sessionId, 1000);
     }
+    pushClientDebugLog("debug", "Resume sync finished", {
+      sessionId,
+      reason,
+    });
+  } catch (error) {
+    pushClientDebugLog("error", "Resume sync failed", {
+      sessionId,
+      reason,
+      error: messageOf(error),
+    });
+    throw error;
   } finally {
     state.detail.resumeSyncInFlight = false;
   }
@@ -8191,6 +8395,10 @@ function scheduleLiveResumeSync(sessionId, delayMs = 3200) {
     return;
   }
 
+  pushClientDebugLog("debug", "Scheduling live resume sync", {
+    sessionId,
+    delayMs,
+  });
   state.detail.liveResumeTimerId = window.setTimeout(async () => {
     state.detail.liveResumeTimerId = 0;
 
@@ -8200,6 +8408,11 @@ function scheduleLiveResumeSync(sessionId, delayMs = 3200) {
 
     try {
       await resumeActiveSessionDetail("live-heartbeat");
+    } catch (error) {
+      pushClientDebugLog("warn", "Live resume sync failed", {
+        sessionId,
+        error: messageOf(error),
+      });
     } finally {
       if (
         state.detail.session &&
@@ -8242,6 +8455,10 @@ function scheduleImportedSessionSync(sessionId, delayMs = 1200) {
     return;
   }
 
+  pushClientDebugLog("debug", "Scheduling imported session sync", {
+    sessionId,
+    delayMs,
+  });
   state.detail.importedSyncTimerId = window.setTimeout(async () => {
     state.detail.importedSyncTimerId = 0;
 
@@ -8270,7 +8487,11 @@ function scheduleImportedSessionSync(sessionId, delayMs = 1200) {
 
       scheduleSessionDetailRender();
       scheduleImportedSessionSync(sessionId, 1600);
-    } catch {
+    } catch (error) {
+      pushClientDebugLog("warn", "Imported session sync failed", {
+        sessionId,
+        error: messageOf(error),
+      });
       scheduleImportedSessionSync(sessionId, 2400);
     }
   }, delayMs);

@@ -12,6 +12,14 @@
         pkgs = import nixpkgs { inherit system; };
         lib = pkgs.lib;
         nodejs = pkgs.nodejs_20;
+        mockCodexCommand = pkgs.writeShellScriptBin "mock-codex" ''
+          exec ${nodejs}/bin/node ${./tests/mock-codex-app-server.js} "$@"
+        '';
+        playwrightRunner = pkgs.writeShellScriptBin "run-remcodex-debug-output-playwright" ''
+          export NODE_PATH=${pkgs.playwright}/lib/node_modules
+          export CHROMIUM_BIN=${pkgs.chromium}/bin/chromium
+          exec ${nodejs}/bin/node ${./tests/remcodex-debug-output.playwright.js} "$@"
+        '';
         whisperModelTiny = pkgs.runCommand "faster-whisper-tiny-en" { } ''
           mkdir -p $out
           cp ${pkgs.fetchurl {
@@ -86,10 +94,30 @@
             description = "${remcodex.meta.description} with whisper-ctranslate2 on PATH";
           };
         };
+        remcodexDebugImage = pkgs.dockerTools.buildLayeredImage {
+          name = "remcodex-debug-output";
+          tag = "latest";
+          contents = [
+            remcodex
+            mockCodexCommand
+            pkgs.coreutils
+            pkgs.bash
+          ];
+          config = {
+            Entrypoint = [ "${remcodex}/bin/remcodex" "start" "--no-open" ];
+            Env = [
+              "PORT=18840"
+              "CODEX_COMMAND=/bin/mock-codex"
+              "CODEX_MODE=app-server"
+              "PROJECT_ROOTS=/workspace"
+              "DATABASE_PATH=/data/remcodex.db"
+            ];
+          };
+        };
       in {
         packages = {
           default = remcodex-with-whisper;
-          inherit remcodex remcodex-with-whisper whisperModelTiny;
+          inherit remcodex remcodex-with-whisper whisperModelTiny remcodexDebugImage;
         };
 
         apps = {
@@ -116,6 +144,71 @@
             export REMCODEX_STT_BINARY=${pkgs.whisper-ctranslate2}/bin/whisper-ctranslate2
             export REMCODEX_STT_MODEL_PATH=${whisperModelTiny}
             echo "Node $(node --version) and whisper support are available."
+          '';
+        };
+      } // lib.optionalAttrs pkgs.stdenv.isLinux {
+        checks.remcodex-debug-output = pkgs.testers.runNixOSTest {
+          name = "remcodex-debug-output";
+          nodes.machine = { pkgs, ... }: {
+            virtualisation.podman.enable = true;
+            virtualisation.oci-containers.backend = "podman";
+            virtualisation.oci-containers.containers.remcodex = {
+              autoStart = true;
+              image = "remcodex-debug-output:latest";
+              imageFile = remcodexDebugImage;
+              environment = {
+                PORT = "18840";
+                CODEX_COMMAND = "/bin/mock-codex";
+                CODEX_MODE = "app-server";
+                PROJECT_ROOTS = "/workspace";
+                DATABASE_PATH = "/data/remcodex.db";
+                MOCK_CODEX_CHUNK_DELAY_MS = "6";
+                MOCK_CODEX_CHUNK_COUNT = "8";
+              };
+              ports = [ "127.0.0.1:18840:18840" ];
+              volumes = [
+                "/var/lib/remcodex-test/workspace:/workspace"
+                "/var/lib/remcodex-test/data:/data"
+              ];
+            };
+
+            systemd.tmpfiles.rules = [
+              "d /var/lib/remcodex-test 0755 root root -"
+              "d /var/lib/remcodex-test/workspace 0755 root root -"
+              "d /var/lib/remcodex-test/data 0755 root root -"
+              "d /tmp/remcodex-debug-output 0755 root root -"
+            ];
+
+            environment.systemPackages = [
+              pkgs.chromium
+              pkgs.nodejs_20
+              pkgs.playwright
+              playwrightRunner
+            ];
+          };
+
+          testScript = ''
+            machine.start()
+            machine.wait_for_unit("podman-remcodex.service")
+            machine.wait_for_open_port(18840)
+            machine.succeed("curl --fail --silent http://127.0.0.1:18840/health >/tmp/remcodex-health.json")
+
+            status, output = machine.execute(
+                "REMCODEX_BASE_URL=http://127.0.0.1:18840 "
+                "REMCODEX_ARTIFACT_DIR=/tmp/remcodex-debug-output "
+                "REMCODEX_PROJECT_PATH=/workspace/e2e-project "
+                "REMCODEX_TURN_COUNT=150 "
+                "run-remcodex-debug-output-playwright"
+            )
+            if status != 0:
+                machine.succeed("echo '=== playwright output ===' >&2")
+                machine.succeed("cat /tmp/remcodex-debug-output/fatal.json >&2 || true")
+                machine.succeed("cat /tmp/remcodex-debug-output/summary.json >&2 || true")
+                machine.succeed("echo '=== podman logs ===' >&2")
+                machine.succeed("podman logs remcodex >&2 || journalctl -u podman-remcodex.service --no-pager >&2 || true")
+                raise Exception(f"Playwright reproduction failed with status {status}: {output}")
+
+            machine.succeed("cat /tmp/remcodex-debug-output/summary.json >/tmp/remcodex-debug-output-summary.json")
           '';
         };
       });

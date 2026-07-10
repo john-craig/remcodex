@@ -228,6 +228,18 @@ nix develop
 remcodex start
 ```
 
+For the Web UI reply-drop investigation harness, the flake also exposes a Linux check that:
+
+- boots RemCodex in a local OCI container
+- swaps real Codex calls for a deterministic mock `app-server`
+- drives repeated chat submissions through Playwright until a reply goes missing or the loop completes
+
+Run it with:
+
+```bash
+nix build .#checks.x86_64-linux.remcodex-debug-output
+```
+
 Voice-note transcription is optional and stays local. RemCodex will look for a whisper CLI on the server machine in this order:
 
 - `whisper`
