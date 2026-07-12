@@ -111,6 +111,7 @@
               "CODEX_MODE=app-server"
               "PROJECT_ROOTS=/workspace"
               "DATABASE_PATH=/data/remcodex.db"
+              "MOCK_CODEX_STREAM_MODE=item-updated"
             ];
           };
         };
@@ -164,6 +165,7 @@
                 DATABASE_PATH = "/data/remcodex.db";
                 MOCK_CODEX_CHUNK_DELAY_MS = "6";
                 MOCK_CODEX_CHUNK_COUNT = "8";
+                MOCK_CODEX_STREAM_MODE = "item-updated";
               };
               ports = [ "127.0.0.1:18840:18840" ];
               volumes = [
@@ -198,6 +200,7 @@
                 "REMCODEX_ARTIFACT_DIR=/tmp/remcodex-debug-output "
                 "REMCODEX_PROJECT_PATH=/workspace/e2e-project "
                 "REMCODEX_TURN_COUNT=150 "
+                "REMCODEX_EXPECT_STREAM_MODE=item-updated "
                 "run-remcodex-debug-output-playwright"
             )
             if status != 0:

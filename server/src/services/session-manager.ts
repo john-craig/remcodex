@@ -845,12 +845,16 @@ export class SessionManager {
         this.ensureTurnStarted(sessionId, runtime, event.turnId || runtime.turnId);
         const phase = event.phase || "final_answer";
         const messageId = this.resolveAssistantMessageId(runtime, phase, event.messageId);
+        const textDelta =
+          this.readRawText(event.payload.textDelta) ||
+          this.readRawText(event.payload.text) ||
+          "";
         this.appendAssistantDelta(
           sessionId,
           runtime,
           phase,
           messageId,
-          this.readRawText(event.payload.textDelta) || "",
+          textDelta,
         );
         return;
       }
@@ -880,11 +884,16 @@ export class SessionManager {
       case "reasoning.delta": {
         this.ensureTurnStarted(sessionId, runtime, event.turnId || runtime.turnId);
         const messageId = this.resolveReasoningMessageId(runtime, event.messageId);
+        const textDelta =
+          this.readRawText(event.payload.textDelta) ||
+          this.readRawText(event.payload.text) ||
+          this.readString(event.payload.summary) ||
+          "";
         this.appendReasoningDelta(
           sessionId,
           runtime,
           messageId,
-          this.readRawText(event.payload.textDelta) || "",
+          textDelta,
           this.readString(event.payload.summary) || null,
         );
         return;

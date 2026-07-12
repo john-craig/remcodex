@@ -3,7 +3,8 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 
-const { chromium } = require("playwright-core");
+const playwrightCorePath = process.env.PLAYWRIGHT_CORE_PATH || "playwright-core";
+const { chromium } = require(playwrightCorePath);
 
 const baseUrl = process.env.REMCODEX_BASE_URL || "http://127.0.0.1:18840";
 const chromiumBin = process.env.CHROMIUM_BIN || "chromium";
@@ -12,6 +13,7 @@ const timeoutMs = readPositiveInt(process.env.REMCODEX_REPLY_TIMEOUT_MS, 12000);
 const artifactDir = process.env.REMCODEX_ARTIFACT_DIR || "/tmp/remcodex-debug-output";
 const projectPath = process.env.REMCODEX_PROJECT_PATH || "/workspace/e2e-project";
 const projectName = process.env.REMCODEX_PROJECT_NAME || "remcodex-e2e";
+const expectedStreamMode = process.env.REMCODEX_EXPECT_STREAM_MODE || "delta";
 
 async function main() {
   await fs.mkdir(artifactDir, { recursive: true });
@@ -83,6 +85,20 @@ async function main() {
           expectedReply,
           { timeout: timeoutMs },
         );
+        await page.waitForFunction(
+          (expectedReplies) => {
+            const rows = Array.from(document.querySelectorAll(".timeline-row-final .msg-bubble-body"));
+            const texts = rows
+              .map((row) => String(row.textContent || "").replace(/\s+/g, " ").trim())
+              .filter(Boolean);
+            if (texts.length < expectedReplies.length) {
+              return false;
+            }
+            return expectedReplies.every((reply, index) => texts[index] === reply);
+          },
+          prompts.map((entry) => entry.expectedReply),
+          { timeout: timeoutMs },
+        );
       } catch (error) {
         await captureFailure(page, consoleLines, pageErrors, {
           status: "missing-reply",
@@ -97,19 +113,30 @@ async function main() {
 
       await page.waitForFunction(() => {
         const action = document.querySelector("#composer-action");
-        return action instanceof HTMLButtonElement && !action.disabled;
+        return (
+          action instanceof HTMLButtonElement &&
+          action.classList.contains("composer-action-fab--send") &&
+          action.getAttribute("aria-label") === "Send"
+        );
       }, { timeout: timeoutMs });
     }
 
     const timeline = await requestJson(`/api/sessions/${session.sessionId}/timeline?limit=1000`);
+    const finalReplies = await page.evaluate(() =>
+      Array.from(document.querySelectorAll(".timeline-row-final .msg-bubble-body"))
+        .map((row) => String(row.textContent || "").replace(/\s+/g, " ").trim())
+        .filter(Boolean),
+    );
     await writeJson("summary.json", {
       status: "ok",
+      expectedStreamMode,
       turnCount,
       sessionId: session.sessionId,
       projectId: project.projectId,
       projectPath,
       timelineCount: Array.isArray(timeline.items) ? timeline.items.length : 0,
       prompts,
+      finalReplies,
       consoleLines,
       pageErrors,
     });

@@ -4,10 +4,9 @@ const readline = require("node:readline");
 
 const chunkDelayMs = readPositiveInt(process.env.MOCK_CODEX_CHUNK_DELAY_MS, 8);
 const chunkCount = readPositiveInt(process.env.MOCK_CODEX_CHUNK_COUNT, 6);
+const streamMode = readStreamMode(process.env.MOCK_CODEX_STREAM_MODE);
 
 let nextThreadId = 1;
-let nextTurnId = 1;
-let nextMessageId = 1;
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -25,6 +24,14 @@ rl.on("close", () => {
 function readPositiveInt(raw, fallback) {
   const parsed = Number.parseInt(String(raw || ""), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readStreamMode(raw) {
+  const normalized = String(raw || "").trim().toLowerCase();
+  if (normalized === "item-updated") {
+    return "item-updated";
+  }
+  return "delta";
 }
 
 function send(message) {
@@ -111,8 +118,8 @@ async function handleLine(line) {
         ? params.threadId.trim()
         : `mock-thread-${nextThreadId++}`;
     const prompt = readPromptText(params);
-    const turnId = `mock-turn-${nextTurnId++}`;
-    const messageId = `mock-message-${nextMessageId++}`;
+    const turnId = deriveTurnId(prompt);
+    const messageId = deriveMessageId(prompt);
 
     respond(id, {
       turn: {
@@ -138,6 +145,40 @@ function readPromptText(params) {
   }
 
   return "empty prompt";
+}
+
+function slugifyPrompt(prompt) {
+  return String(prompt || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+}
+
+function readPromptOrdinal(prompt) {
+  const match = String(prompt || "").match(/turn-(\d+)-marker/i);
+  if (!match) {
+    return "";
+  }
+
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isFinite(parsed) && parsed > 0 ? String(parsed) : "";
+}
+
+function deriveTurnId(prompt) {
+  const ordinal = readPromptOrdinal(prompt);
+  if (ordinal) {
+    return `mock-turn-${ordinal}`;
+  }
+  return `mock-turn-${slugifyPrompt(prompt) || "1"}`;
+}
+
+function deriveMessageId(prompt) {
+  const ordinal = readPromptOrdinal(prompt);
+  if (ordinal) {
+    return `mock-message-${ordinal}`;
+  }
+  return `mock-message-${slugifyPrompt(prompt) || "1"}`;
 }
 
 function buildReplyText(turnId, prompt) {
@@ -186,8 +227,28 @@ async function emitTurn(threadId, turnId, messageId, prompt) {
     },
   });
 
+  let cumulativeText = "";
   for (const chunk of chunks) {
     await delay(chunkDelayMs);
+    cumulativeText += chunk;
+    if (streamMode === "item-updated") {
+      notify("item/updated", {
+        turnId,
+        item: {
+          id: messageId,
+          type: "agentMessage",
+          phase: "final_answer",
+          content: [
+            {
+              type: "text",
+              text: cumulativeText,
+            },
+          ],
+        },
+      });
+      continue;
+    }
+
     notify("item/agentMessage/delta", {
       turnId,
       messageId,

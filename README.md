@@ -247,6 +247,7 @@ For the Web UI reply-drop investigation harness, the flake also exposes a Linux 
 
 - boots RemCodex in a local OCI container
 - swaps real Codex calls for a deterministic mock `app-server`
+- streams assistant replies through cumulative `item/updated` events
 - drives repeated chat submissions through Playwright until a reply goes missing or the loop completes
 
 Run it with:
