@@ -28,6 +28,10 @@ export function getProjects() {
   return request("/api/projects");
 }
 
+export function getProfiles() {
+  return request("/api/profiles");
+}
+
 export function createProject(payload) {
   return request("/api/projects", {
     method: "POST",

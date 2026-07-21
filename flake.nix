@@ -45,7 +45,7 @@
           src = self;
 
           inherit nodejs;
-          npmDepsHash = "sha256-JjTjD2OBS355hufnvwI/akpGtdAcGHTT2zSet+4k9Os=";
+          npmDepsHash = "sha256-tc76sGP+OO0sz98A7WTs+7frXV9EDu87TWoCgfCy1os=";
 
           nativeBuildInputs = [
             pkgs.makeWrapper

@@ -5,6 +5,7 @@ import { CodexRolloutSyncService } from "../services/codex-rollout-sync";
 import { ProjectManager } from "../services/project-manager";
 import { SessionManager } from "../services/session-manager";
 import { SessionTimelineService } from "../services/session-timeline-service";
+import { CodexAppServerRegistryService } from "../services/codex-app-server-registry";
 import { normalizeCodexExecLaunchInput } from "../utils/codex-launch";
 
 export function createSessionRouter(
@@ -12,11 +13,13 @@ export function createSessionRouter(
   eventStore: EventStore,
   projectManager: ProjectManager,
   codexRolloutSync: CodexRolloutSyncService,
+  appServerRegistry: CodexAppServerRegistryService,
   sessionTimeline: SessionTimelineService,
 ): Router {
   const router = Router();
 
-  router.get("/", (_request, response) => {
+  router.get("/", async (_request, response) => {
+    await appServerRegistry.sync();
     const items = sessionManager.listSessions().map((session) => ({
       sessionId: session.id,
       title: session.title,
@@ -24,10 +27,14 @@ export function createSessionRouter(
       status: session.status,
       liveBusy: sessionManager.isLiveBusy(session.id),
       codexThreadId: session.codex_thread_id,
+      startingPrompt: session.starting_prompt,
       sourceKind: session.source_kind,
       sourceRolloutPath: session.source_rollout_path,
       sourceThreadId: session.source_thread_id,
       sourceRolloutHasOpenTurn: session.source_rollout_has_open_turn === 1,
+      appServerId: session.app_server_id,
+      appServerEndpoint: session.app_server_endpoint,
+      appServerPid: session.app_server_pid,
       pendingApproval: sessionManager.getPendingApproval(session.id),
       lastEventAt: session.last_event_at,
       lastAssistantContent: session.last_assistant_content,
@@ -38,6 +45,10 @@ export function createSessionRouter(
     }));
 
     response.json({ items });
+  });
+
+  router.get("/app-servers", (_request, response) => {
+    response.json({ items: appServerRegistry.list() });
   });
 
   router.post("/import-codex", (request, response, next) => {
@@ -52,15 +63,17 @@ export function createSessionRouter(
 
   router.post("/", (request, response, next) => {
     try {
-      const body = request.body as { title?: string; projectId?: string };
+      const body = request.body as { title?: string; projectId?: string; startingPrompt?: string };
       const session = sessionManager.createSession({
         title: body.title,
         projectId: body.projectId ?? "",
+        startingPrompt: body.startingPrompt,
       });
 
       response.status(201).json({
         sessionId: session.id,
         status: session.status,
+        startingPrompt: session.starting_prompt,
       });
     } catch (error) {
       next(error);
@@ -87,13 +100,18 @@ export function createSessionRouter(
         liveBusy: sessionManager.isLiveBusy(session.id),
         pid: session.pid,
         codexThreadId: session.codex_thread_id,
+        startingPrompt: session.starting_prompt,
         sourceKind: session.source_kind,
         sourceRolloutPath: session.source_rollout_path,
         sourceThreadId: session.source_thread_id,
         sourceRolloutHasOpenTurn: session.source_rollout_has_open_turn === 1,
+        appServerId: session.app_server_id,
+        appServerEndpoint: session.app_server_endpoint,
+        appServerPid: session.app_server_pid,
         pendingApproval: sessionManager.getPendingApproval(session.id),
         createdAt: session.created_at,
         updatedAt: session.updated_at,
+        sessionUrl: `/#/sessions/${encodeURIComponent(session.id)}`,
       });
     } catch (error) {
       next(error);

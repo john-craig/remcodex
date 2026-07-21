@@ -135,9 +135,27 @@ It is built for real workflows:
 - mobile check-ins
 - approval prompts
 - imported rollout history
+- discoverable Codex app-server sessions
 - timeline-style execution flow
 
 Instead of raw terminal logs, you get a structured, visual timeline you can follow and control.
+
+### Interactive Codex app-servers
+
+When configured by Panoply, a bare interactive `codex` command starts a Unix-socket
+app-server and records its endpoint under `$XDG_RUNTIME_DIR/codex-app-servers`.
+RemCodex discovers those endpoints, imports their thread history, and can send
+follow-up turns through the same app-server. Remote follow-up turns preserve the
+unattended dangerous-bypass policy and auto-approve tools from discovered MCP
+servers. Explicit Codex subcommands continue to pass directly to the underlying
+CLI.
+
+The workspace sidebar's `+ New session` control also remembers a default
+profile. Pick `Custom` to keep the current project-selection flow, or choose one
+of the defined profiles to reuse it for future UI-started sessions.
+When a profile provides a starting prompt, RemCodex shows it above the composer
+as a temporary banner and prepends it to the first message you send in that
+session.
 
 ---
 
@@ -224,6 +242,40 @@ Clients must send:
 ```bash
 Authorization: Bearer secret
 ```
+
+To register RemCodex itself as a Codex MCP server, add this to
+`~/.codex/config.toml` and adjust the port or token path if needed:
+
+```toml
+[mcp_servers.remcodex]
+url = "http://127.0.0.1:18840/mcp"
+default_tools_approval_mode = "approve"
+
+[mcp_servers.remcodex.http_headers]
+Authorization = "Bearer $(cat /path/to/remcodex-token)"
+```
+
+If you do not set `REMCODEX_MCP_API_TOKEN` when starting RemCodex, leave the
+`http_headers` table out.
+
+RemCodex can seed agent profiles from a static TOML config at startup. By
+default it reads `~/.remcodex/config.toml`, and you can override that with
+`REMCODEX_CONFIG_PATH`.
+
+The sample file at `docs/remcodex-profiles.example.toml` shows the supported
+shape:
+
+```toml
+[[profiles]]
+name = "remcodex-demo"
+starting_prompt = "Use RemCodex to inspect the current session, keep the workspace state in view, and prefer small safe changes when testing UI flows."
+default_directory = "/home/evak/programming/by_category/agentic/remcodex"
+```
+
+The profile API still exists for runtime additions, but startup config is the
+preferred way to define the profiles that appear in the new-session dropdown.
+The profile `starting_prompt` becomes a one-time prefix for the first message in
+the session, and the UI banner disappears after that message is sent.
 
 The flake default package wraps `remcodex` with:
 

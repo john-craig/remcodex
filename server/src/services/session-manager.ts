@@ -21,6 +21,10 @@ import type {
 import { AppError } from "../utils/errors";
 import { createId } from "../utils/ids";
 import { appendCappedText } from "../utils/output-limits";
+import {
+  composeMessageContentWithStartingPrompt,
+  normalizeSessionStartingPrompt,
+} from "../utils/session-starting-prompt";
 import type { CodexJsonEvent } from "./codex-exec-runner";
 import { createCodexRunner, type CodexExecutionMode, type CodexRunner } from "./codex-runner";
 import {
@@ -198,12 +202,16 @@ export class SessionManager {
             s.status,
             s.pid,
             s.codex_thread_id,
+            s.starting_prompt,
             s.source_kind,
             s.source_rollout_path,
             s.source_thread_id,
             s.source_sync_cursor,
             s.source_last_synced_at,
             s.source_rollout_has_open_turn,
+            s.app_server_id,
+            s.app_server_endpoint,
+            s.app_server_pid,
             s.created_at,
             s.updated_at,
             (
@@ -241,6 +249,36 @@ export class SessionManager {
       .all() as SessionListRecord[];
   }
 
+  findSessionByProjectPath(projectPath: string): SessionRecord | null {
+    const trimmedPath = projectPath.trim();
+    if (!trimmedPath) {
+      return null;
+    }
+
+    const normalizedPath = path.resolve(trimmedPath);
+    const project = this.options.projectManager
+      .listProjects()
+      .find((candidate) => path.resolve(candidate.path) === normalizedPath);
+    if (!project) {
+      return null;
+    }
+
+    return (
+      (this.options.db
+        .prepare(
+          `
+            SELECT *
+            FROM sessions
+            WHERE project_id = ?
+              AND status NOT IN ('completed', 'failed')
+            ORDER BY updated_at DESC
+            LIMIT 1
+          `,
+        )
+        .get(project.id) as SessionRecord | undefined) ?? null
+    );
+  }
+
   isLiveBusy(sessionId: string): boolean {
     const session = this.getSession(sessionId);
     if (!session) {
@@ -267,12 +305,16 @@ export class SessionManager {
               status,
               pid,
               codex_thread_id,
+              starting_prompt,
               source_kind,
               source_rollout_path,
               source_thread_id,
               source_sync_cursor,
               source_last_synced_at,
               source_rollout_has_open_turn,
+              app_server_id,
+              app_server_endpoint,
+              app_server_pid,
               created_at,
               updated_at
             FROM sessions
@@ -314,7 +356,7 @@ export class SessionManager {
     };
   }
 
-  createSession(input: { projectId: string; title?: string }): SessionRecord {
+  createSession(input: { projectId: string; title?: string; startingPrompt?: string }): SessionRecord {
     const project = this.options.projectManager.getProject(input.projectId);
     if (!project) {
       throw new AppError(404, "Project not found.");
@@ -328,12 +370,16 @@ export class SessionManager {
       status: "idle",
       pid: null,
       codex_thread_id: null,
+      starting_prompt: normalizeSessionStartingPrompt(input.startingPrompt),
       source_kind: "native",
       source_rollout_path: null,
       source_thread_id: null,
       source_sync_cursor: null,
       source_last_synced_at: null,
       source_rollout_has_open_turn: 0,
+      app_server_id: null,
+      app_server_endpoint: null,
+      app_server_pid: null,
       created_at: timestamp,
       updated_at: timestamp,
     };
@@ -348,16 +394,20 @@ export class SessionManager {
             status,
             pid,
             codex_thread_id,
+            starting_prompt,
             source_kind,
             source_rollout_path,
             source_thread_id,
             source_sync_cursor,
             source_last_synced_at,
             source_rollout_has_open_turn,
+            app_server_id,
+            app_server_endpoint,
+            app_server_pid,
             created_at,
             updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -367,12 +417,16 @@ export class SessionManager {
         session.status,
         session.pid,
         session.codex_thread_id,
+        session.starting_prompt,
         session.source_kind,
         session.source_rollout_path,
         session.source_thread_id,
         session.source_sync_cursor,
         session.source_last_synced_at,
         session.source_rollout_has_open_turn,
+        session.app_server_id,
+        session.app_server_endpoint,
+        session.app_server_pid,
         session.created_at,
         session.updated_at,
       );
@@ -395,7 +449,8 @@ export class SessionManager {
     if (!project) {
       throw new AppError(404, "Project not found for session.");
     }
-    const runtimePrompt = normalizeDemoPrompt(project.path, message);
+    const userMessage = composeMessageContentWithStartingPrompt(message, session.starting_prompt);
+    const runtimePrompt = normalizeDemoPrompt(project.path, userMessage);
 
     const currentRunner = this.runners.get(sessionId);
     const busyStatuses: SessionStatus[] = ["starting", "running", "stopping"];
@@ -412,7 +467,7 @@ export class SessionManager {
             WHERE id = ?
           `,
         )
-        .run(deriveSessionTitleFromMessage(message), nowIso(), sessionId);
+        .run(deriveSessionTitleFromMessage(userMessage), nowIso(), sessionId);
     }
 
     const turnId = createId("turn");
@@ -425,9 +480,21 @@ export class SessionManager {
       phase: null,
       stream: null,
       payload: {
-        text: message,
+        text: userMessage,
       },
     });
+
+    if (session.starting_prompt.trim()) {
+      this.options.db
+        .prepare(
+          `
+            UPDATE sessions
+            SET starting_prompt = '', updated_at = ?
+            WHERE id = ?
+          `,
+        )
+        .run(nowIso(), sessionId);
+    }
 
     this.startRunner(
       sessionId,
@@ -552,7 +619,13 @@ export class SessionManager {
       return existing;
     }
 
-    const runner = createCodexRunner(this.options.codexMode, this.options.codexCommand, cwd);
+    const session = this.getSessionOrThrow(sessionId);
+    const runner = createCodexRunner(
+      this.options.codexMode,
+      this.options.codexCommand,
+      cwd,
+      session.app_server_endpoint,
+    );
     const effectiveLaunch = this.withSessionWritableRoots(sessionId, codexLaunch);
     const runtime: RunnerState = {
       runner,

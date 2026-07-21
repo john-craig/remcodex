@@ -6,6 +6,7 @@ import * as z from "zod/v4";
 
 import type { EventStore } from "./services/event-store";
 import { ProjectManager } from "./services/project-manager";
+import { AgentProfileManager } from "./services/agent-profile-manager";
 import { SessionManager } from "./services/session-manager";
 import { SessionTimelineService } from "./services/session-timeline-service";
 import { CodexRolloutSyncService } from "./services/codex-rollout-sync";
@@ -21,6 +22,7 @@ export interface RemCodexMcpDependencies {
   sessionManager: SessionManager;
   sessionTimeline: SessionTimelineService;
   codexRolloutSync: CodexRolloutSyncService;
+  profileManager: AgentProfileManager;
 }
 
 export interface RemCodexMcpRequestOptions {
@@ -88,6 +90,7 @@ function serializeSession(
     pendingApproval,
     createdAt: session.created_at,
     updatedAt: session.updated_at,
+    sessionUrl: `/#/sessions/${encodeURIComponent(session.id)}`,
   };
 }
 
@@ -118,6 +121,7 @@ function serializeSessionListItem(
     eventCount: session.event_count,
     createdAt: session.created_at,
     updatedAt: session.updated_at,
+    sessionUrl: `/#/sessions/${encodeURIComponent(session.id)}`,
   };
 }
 
@@ -184,6 +188,27 @@ function registerToolserver(
   deps: RemCodexMcpDependencies,
 ) {
   server.registerTool(
+    "list-profiles",
+    {
+      description: "List RemCodex agent profiles.",
+      inputSchema: z.object({}),
+    },
+    async () => mcpJsonResult(deps.profileManager.listProfiles()),
+  );
+
+  server.registerTool(
+    "get-profile",
+    {
+      description: "Get a RemCodex agent profile by id or name.",
+      inputSchema: z.object({ profileId: z.string().min(1) }),
+    },
+    async ({ profileId }) => {
+      const profile = deps.profileManager.getProfile(profileId);
+      return profile ? mcpJsonResult(profile) : mcpErrorResult("Profile not found.");
+    },
+  );
+
+  server.registerTool(
     "list-projects",
     {
       description: "List all RemCodex projects.",
@@ -249,7 +274,10 @@ function registerToolserver(
     },
     async ({ projectId, title }) => {
       try {
-        const session = deps.sessionManager.createSession({ projectId, title });
+        const project = deps.projectManager.getProject(projectId);
+        const session =
+          deps.sessionManager.findSessionByProjectPath(project?.path ?? "") ??
+          deps.sessionManager.createSession({ projectId, title });
         return mcpJsonResult(
           serializeSession(session, deps.projectManager, deps.sessionManager.getPendingApproval(session.id)),
         );

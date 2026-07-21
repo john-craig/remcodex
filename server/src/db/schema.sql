@@ -5,6 +5,15 @@ CREATE TABLE IF NOT EXISTS projects (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+CREATE TABLE IF NOT EXISTS agent_profiles (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  starting_prompt TEXT NOT NULL,
+  default_directory TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   title TEXT,
@@ -12,12 +21,16 @@ CREATE TABLE IF NOT EXISTS sessions (
   status TEXT NOT NULL,
   pid INTEGER,
   codex_thread_id TEXT,
+  starting_prompt TEXT NOT NULL DEFAULT '',
   source_kind TEXT NOT NULL DEFAULT 'native',
   source_rollout_path TEXT,
   source_thread_id TEXT,
   source_sync_cursor INTEGER,
   source_last_synced_at TEXT,
   source_rollout_has_open_turn INTEGER NOT NULL DEFAULT 0,
+  app_server_id TEXT,
+  app_server_endpoint TEXT,
+  app_server_pid INTEGER,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   FOREIGN KEY (project_id) REFERENCES projects(id)

@@ -1,5 +1,6 @@
 import { getCodexHosts, getCodexQuota } from "../api.js";
 import { t } from "../i18n/index.js";
+import { normalizeSessionStartingPrompt } from "../utils/session-starting-prompt.js";
 
 const CODEX_LAUNCH_STORAGE_KEY = "remote-agent-console.codexLaunch.v1";
 
@@ -212,6 +213,20 @@ function renderComposerQuotaPopover(detailState) {
         <p class="input-popover-quota-line">${escapeHtml(t("composer.quota.week", { percent: weekPercent, reset: weekReset }))}</p>
       </div>
     </details>
+  `;
+}
+
+export function renderComposerStartingPromptBanner(detailState) {
+  const startingPrompt = normalizeSessionStartingPrompt(detailState?.startingPrompt || "");
+  if (!startingPrompt) {
+    return "";
+  }
+
+  return `
+    <div class="composer-starting-prompt-banner" aria-live="polite">
+      <span class="composer-starting-prompt-banner-label">${escapeHtml(t("composer.startingPromptBanner"))}</span>
+      <span class="composer-starting-prompt-banner-text">${escapeHtml(startingPrompt)}</span>
+    </div>
   `;
 }
 
@@ -480,6 +495,8 @@ function persistCodexLaunchPrefs(prefs) {
   }
 }
 
+export { persistCodexLaunchPrefs };
+
 export function buildCodexLaunchPayload(launch, uiOptions) {
   if (!launch) {
     return undefined;
@@ -545,6 +562,7 @@ export function renderComposerInput({ session, detailState, uiOptions }) {
 
   return `
     <div class="input-container ${isBusy ? "input-container--busy" : ""}">
+      ${renderComposerStartingPromptBanner(detailState)}
       <textarea
         name="content"
         class="input-area"

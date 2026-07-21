@@ -1052,6 +1052,21 @@ export class CodexRolloutSyncService {
     };
   }
 
+  attachAppServer(
+    sessionId: string,
+    appServer: { id: string; endpoint: string; pid: number | null },
+  ): void {
+    this.db
+      .prepare(
+        `
+          UPDATE sessions
+          SET app_server_id = ?, app_server_endpoint = ?, app_server_pid = ?, updated_at = ?
+          WHERE id = ?
+        `,
+      )
+      .run(appServer.id, appServer.endpoint, appServer.pid, new Date().toISOString(), sessionId);
+  }
+
   syncImportedSession(sessionId: string): SyncResult {
     const session = this.db
       .prepare(

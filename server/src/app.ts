@@ -8,24 +8,33 @@ import { createCodexOptionsRouter } from "./controllers/codex-options.controller
 import { createMessageRouter } from "./controllers/message.controller";
 import { createProjectRouter } from "./controllers/project.controller";
 import { createSessionRouter } from "./controllers/session.controller";
+import { createProfileRouter } from "./controllers/profile.controller";
 import { handleRemCodexMcpRequest } from "./mcp";
 import { createDatabase } from "./db/client";
 import { runMigrations } from "./db/migrations";
 import { registerSessionGateway } from "./gateways/ws.gateway";
 import { EventStore } from "./services/event-store";
 import { CodexRolloutSyncService } from "./services/codex-rollout-sync";
+import { CodexAppServerRegistryService } from "./services/codex-app-server-registry";
 import { ProjectManager } from "./services/project-manager";
+import { AgentProfileManager } from "./services/agent-profile-manager";
 import { SessionManager } from "./services/session-manager";
 import { SpeechToTextService } from "./services/speech-to-text";
 import { SessionTimelineService } from "./services/session-timeline-service";
 import type { CodexExecutionMode } from "./services/codex-runner";
-import { resolveDefaultDatabasePath, resolvePackageRoot } from "./utils/runtime-paths";
+import { loadRemCodexConfig } from "./utils/remcodex-config";
+import {
+  resolveDefaultConfigPath,
+  resolveDefaultDatabasePath,
+  resolvePackageRoot,
+} from "./utils/runtime-paths";
 import { resolveExecutable } from "./utils/command";
 import { isAppError } from "./utils/errors";
 
 export interface RemCodexServerOptions {
   port?: number;
   databasePath?: string;
+  configPath?: string;
   projectRootsEnv?: string;
   repoRoot?: string;
   codexCommand?: string;
@@ -70,6 +79,10 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
     options.databasePath ??
     process.env.DATABASE_PATH ??
     resolveDefaultDatabasePath();
+  const configPath =
+    options.configPath ??
+    process.env.REMCODEX_CONFIG_PATH ??
+    resolveDefaultConfigPath();
   const codexCommand = resolveExecutable(options.codexCommand ?? process.env.CODEX_COMMAND ?? "codex");
   const codexMode: CodexExecutionMode =
     options.codexMode ?? (process.env.CODEX_MODE === "exec-json" ? "exec-json" : "app-server");
@@ -83,7 +96,12 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
   const eventStore = new EventStore(db);
   const sessionTimeline = new SessionTimelineService(eventStore);
   const projectManager = new ProjectManager(db, projectRootsEnv, repoRoot);
+  const remCodexConfig = loadRemCodexConfig(configPath);
+  const profileManager = new AgentProfileManager(db, {
+    initialProfiles: remCodexConfig.profiles,
+  });
   const codexRolloutSync = new CodexRolloutSyncService(db);
+  const appServerRegistry = new CodexAppServerRegistryService(codexRolloutSync);
   const speechToText = new SpeechToTextService({
     preferredBinary: process.env.REMCODEX_STT_BINARY,
     modelPath: process.env.REMCODEX_STT_MODEL_PATH,
@@ -113,6 +131,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
   });
 
   app.use("/api/projects", createProjectRouter(projectManager));
+  app.use("/api/profiles", createProfileRouter(profileManager));
   app.use(
     "/api/codex",
     createCodexOptionsRouter({
@@ -130,6 +149,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
       eventStore,
       projectManager,
       codexRolloutSync,
+      appServerRegistry,
       sessionTimeline,
     ),
   );
@@ -146,6 +166,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
             sessionManager,
             sessionTimeline,
             codexRolloutSync,
+            profileManager,
           },
           {
             apiToken: mcpApiToken,

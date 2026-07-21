@@ -10,6 +10,7 @@ import {
   getCodexStatus,
   getHealth,
   getProjects,
+  getProfiles,
   getSession,
   getSessionEvents,
   getSessionTimelineEvents,
@@ -29,7 +30,12 @@ import {
   loadCodexLaunchPrefs,
   normalizeCodexLaunchAgainstUi,
   renderComposerInput,
+  persistCodexLaunchPrefs,
 } from "./components/composer.js";
+import {
+  composeMessageContentWithStartingPrompt,
+  normalizeSessionStartingPrompt,
+} from "./utils/session-starting-prompt.js";
 import { renderSessionTopBar } from "./components/session-workbench.js";
 import {
   normalizeRawSessionEvent,
@@ -57,6 +63,9 @@ const app = document.querySelector("#app");
 const SESSION_VIEW_STORAGE_KEY = "remote-agent-console.sessions.view";
 const CODEX_QUOTA_CACHE_PREFIX = "remote-agent-console.codexQuota:";
 const WORKSPACE_UI_STORAGE_KEY = "remote-agent-console.workspace.ui";
+const WORKSPACE_NEW_SESSION_PROFILE_STORAGE_KEY = "remote-agent-console.workspace.newSessionProfile.v1";
+const WORKSPACE_SESSION_STARTING_PROMPT_STORAGE_PREFIX =
+  "remote-agent-console.workspace.sessionStartingPrompt.v1:";
 const SLOW_COMMAND_SECONDS = 5;
 const LONG_RUNNING_COMMAND_SECONDS = 10;
 const COMMAND_PREVIEW_HEAD_LINES = 3;
@@ -99,6 +108,48 @@ const DEFAULT_DETAIL_VIEW = {
   rawStdoutBuckets: {},
   clientLogs: [],
 };
+
+function getWorkspaceSessionStartingPromptStorageKey(sessionId) {
+  const normalizedSessionId = String(sessionId || "").trim();
+  return normalizedSessionId
+    ? `${WORKSPACE_SESSION_STARTING_PROMPT_STORAGE_PREFIX}${normalizedSessionId}`
+    : "";
+}
+
+function loadWorkspaceSessionStartingPrompt(sessionId) {
+  const storageKey = getWorkspaceSessionStartingPromptStorageKey(sessionId);
+  if (!storageKey) {
+    return "";
+  }
+
+  try {
+    return normalizeSessionStartingPrompt(window.localStorage?.getItem(storageKey) || "");
+  } catch {
+    return "";
+  }
+}
+
+function persistWorkspaceSessionStartingPrompt(sessionId, prompt) {
+  const storageKey = getWorkspaceSessionStartingPromptStorageKey(sessionId);
+  if (!storageKey) {
+    return;
+  }
+
+  const normalizedPrompt = normalizeSessionStartingPrompt(prompt);
+  try {
+    if (normalizedPrompt) {
+      window.localStorage?.setItem(storageKey, normalizedPrompt);
+    } else {
+      window.localStorage?.removeItem(storageKey);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearWorkspaceSessionStartingPrompt(sessionId) {
+  persistWorkspaceSessionStartingPrompt(sessionId, "");
+}
 
 function browserSupportsVoiceRecording() {
   return Boolean(window.MediaRecorder && navigator.mediaDevices?.getUserMedia);
@@ -1468,7 +1519,9 @@ const state = {
   workspace: {
     sidebarCollapsed: readWorkspaceUiState().sidebarCollapsed,
     localeMenuOpen: false,
+    newSessionProfileMenuOpen: false,
     activeSessionId: "",
+    profiles: [],
     createDialog: {
       open: false,
       mode: "pick-project",
@@ -1533,6 +1586,8 @@ const state = {
     composerEnvironmentMenuOpen: false,
     voiceRecording: false,
     voiceTranscribing: false,
+    startingPrompt: "",
+    composerRefreshRequested: false,
     slashMenuOpen: false,
     slashCommands: [],
     slashCommandsLoading: false,
@@ -1592,6 +1647,8 @@ function renderRoute() {
       optimisticSend: null,
       voiceRecording: false,
       voiceTranscribing: false,
+      startingPrompt: "",
+      composerRefreshRequested: false,
     };
   }
 
@@ -1675,6 +1732,212 @@ function getDefaultWorkspaceProjectBrowsePath() {
   return normalizeProjectPathForComparison(
     state.detail.session?.projectPath || state.sessions.projects[0]?.path || "",
   );
+}
+
+function getWorkspaceNewSessionProfileItems() {
+  const profiles = Array.isArray(state.workspace.profiles) ? state.workspace.profiles : [];
+  const uniqueProfiles = [];
+  const seenNames = new Set();
+
+  for (const profile of profiles) {
+    const name = String(profile?.name || "").trim();
+    if (!name || seenNames.has(name)) {
+      continue;
+    }
+    seenNames.add(name);
+    uniqueProfiles.push(profile);
+  }
+
+  return [
+    { name: "", label: t("workspace.sidebar.newSessionCustom") },
+    ...uniqueProfiles.map((profile) => ({
+      name: String(profile.name || "").trim(),
+      label: String(profile.name || "").trim(),
+      defaultDirectory: String(profile.default_directory || "").trim(),
+    })),
+  ];
+}
+
+function getWorkspaceNewSessionProfileName() {
+  try {
+    const stored = window.localStorage?.getItem(WORKSPACE_NEW_SESSION_PROFILE_STORAGE_KEY) || "";
+    const profileName = String(stored || "").trim();
+    if (!profileName) {
+      return "";
+    }
+
+    const profiles = Array.isArray(state.workspace.profiles) ? state.workspace.profiles : [];
+    if (!profiles.length) {
+      return profileName;
+    }
+
+    return profiles.some((profile) => String(profile?.name || "").trim() === profileName)
+      ? profileName
+      : "";
+  } catch {
+    return "";
+  }
+}
+
+function getWorkspaceNewSessionProfileLabel() {
+  const profileName = getWorkspaceNewSessionProfileName();
+  return profileName || t("workspace.sidebar.newSessionCustom");
+}
+
+function getWorkspaceNewSessionProfile(profileName) {
+  const name = String(profileName || "").trim();
+  if (!name) {
+    return null;
+  }
+
+  const profiles = Array.isArray(state.workspace.profiles) ? state.workspace.profiles : [];
+  return (
+    profiles.find((profile) => String(profile?.name || "").trim() === name) || null
+  );
+}
+
+function persistWorkspaceNewSessionProfile(profileName) {
+  const nextProfile = String(profileName || "").trim();
+  try {
+    window.localStorage?.setItem(WORKSPACE_NEW_SESSION_PROFILE_STORAGE_KEY, nextProfile);
+  } catch {
+    /* ignore */
+  }
+}
+
+function closeWorkspaceNewSessionProfileMenu(selectedSessionId = state.workspace.activeSessionId) {
+  if (!state.workspace.newSessionProfileMenuOpen) {
+    return;
+  }
+
+  state.workspace.newSessionProfileMenuOpen = false;
+  patchWorkspaceSidebar(selectedSessionId);
+}
+
+function setWorkspaceNewSessionProfile(profileName, selectedSessionId = state.workspace.activeSessionId) {
+  persistWorkspaceNewSessionProfile(profileName);
+  state.workspace.newSessionProfileMenuOpen = false;
+  patchWorkspaceSidebar(selectedSessionId);
+}
+
+async function createWorkspaceSessionForProjectPath(projectPath, startingPrompt = "") {
+  const normalizedProjectPath = normalizeProjectPathForComparison(projectPath);
+  if (!normalizedProjectPath) {
+    throw new Error("Profile default directory is missing.");
+  }
+
+  const refreshedProjects = await getProjects();
+  state.sessions.projects = Array.isArray(refreshedProjects.items) ? refreshedProjects.items : [];
+
+  let project = findExistingProjectByPath(normalizedProjectPath);
+  if (!project) {
+    const projectName = deriveProjectNameFromPath(normalizedProjectPath);
+    if (!projectName) {
+      throw new Error("Profile default directory is invalid.");
+    }
+
+    const createdProject = await createProject({
+      name: projectName,
+      path: normalizedProjectPath,
+      createMissing: false,
+    });
+    const refreshedAfterCreate = await getProjects();
+    state.sessions.projects = Array.isArray(refreshedAfterCreate.items) ? refreshedAfterCreate.items : [];
+    project =
+      state.sessions.projects.find(
+        (candidate) => normalizeProjectPathForComparison(candidate.path) === normalizedProjectPath,
+      ) || {
+        projectId: createdProject.projectId,
+        name: projectName,
+        path: normalizedProjectPath,
+      };
+  }
+
+  const session = await createSession({
+    projectId: project.projectId,
+    startingPrompt: normalizeSessionStartingPrompt(startingPrompt || ""),
+  });
+  return session;
+}
+
+async function startWorkspaceNewSessionFromSelectedProfile(selectedSessionId = state.workspace.activeSessionId) {
+  const profileName = getWorkspaceNewSessionProfileName();
+  if (!profileName) {
+    openWorkspaceCreateSessionDialog();
+    return;
+  }
+
+  const profile = getWorkspaceNewSessionProfile(profileName);
+  const defaultDirectory = String(profile?.default_directory || "").trim();
+  if (!defaultDirectory) {
+    showToast(t("workspace.create.pathRequired"));
+    return;
+  }
+
+  state.workspace.newSessionProfileMenuOpen = false;
+  const launchPrefs = loadCodexLaunchPrefs();
+  if (launchPrefs.profile) {
+    launchPrefs.profile = "";
+    persistCodexLaunchPrefs(launchPrefs);
+  }
+  if (state.detail.codexLaunch?.profile) {
+    state.detail.codexLaunch.profile = "";
+  }
+  const startingPrompt = normalizeSessionStartingPrompt(profile?.starting_prompt || "");
+  const session = await createWorkspaceSessionForProjectPath(defaultDirectory, startingPrompt);
+  window.location.hash = buildSessionDetailHash(
+    session.sessionId,
+    state.detail.filter,
+    state.detail.severity,
+    state.detail.search,
+    state.detail.autoScroll,
+  );
+}
+
+function ensureWorkspaceSidebarGlobalListeners() {
+  if (window.__workspaceSidebarListenersBound) {
+    return;
+  }
+
+  window.__workspaceSidebarListenersBound = true;
+
+  document.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) {
+      return;
+    }
+
+    if (state.workspace.localeMenuOpen && !target.closest(".workspace-sidebar-locale")) {
+      state.workspace.localeMenuOpen = false;
+      patchWorkspaceSidebar(state.workspace.activeSessionId);
+      return;
+    }
+
+    if (
+      state.workspace.newSessionProfileMenuOpen &&
+      !target.closest(".workspace-sidebar-new-session-group")
+    ) {
+      state.workspace.newSessionProfileMenuOpen = false;
+      patchWorkspaceSidebar(state.workspace.activeSessionId);
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") {
+      return;
+    }
+
+    if (state.workspace.newSessionProfileMenuOpen) {
+      state.workspace.newSessionProfileMenuOpen = false;
+      patchWorkspaceSidebar(state.workspace.activeSessionId);
+      return;
+    }
+
+    if (state.workspace.localeMenuOpen) {
+      state.workspace.localeMenuOpen = false;
+      patchWorkspaceSidebar(state.workspace.activeSessionId);
+    }
+  });
 }
 
 function shouldAutotitleSession(session) {
@@ -2034,7 +2297,49 @@ function renderWorkspaceSidebar(selectedSessionId = "") {
       </div>
 
       <div class="workspace-sidebar-actions">
-        <button id="workspace-create-session" type="button" class="primary-button">${escapeHtml(t("workspace.sidebar.newSession"))}</button>
+        <div class="workspace-sidebar-new-session-group" role="group" aria-label="${escapeHtml(t("workspace.sidebar.newSessionProfileMenu"))}">
+          <button
+            id="workspace-new-session-profile-toggle"
+            type="button"
+            class="workspace-sidebar-new-session-toggle"
+            aria-haspopup="menu"
+            aria-expanded="${state.workspace.newSessionProfileMenuOpen ? "true" : "false"}"
+            aria-label="${escapeHtml(t("workspace.sidebar.newSessionProfileMenu"))}"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path d="m6 9 6 6 6-6"></path>
+            </svg>
+          </button>
+          <button id="workspace-create-session" type="button" class="workspace-sidebar-new-session-main">
+            <span class="workspace-sidebar-new-session-main-label">${escapeHtml(t("workspace.sidebar.newSession"))}</span>
+            <span class="workspace-sidebar-new-session-main-profile">${escapeHtml(getWorkspaceNewSessionProfileLabel())}</span>
+          </button>
+          ${
+            state.workspace.newSessionProfileMenuOpen
+              ? `
+                <div class="workspace-sidebar-new-session-menu" role="menu" aria-label="${escapeHtml(t("workspace.sidebar.newSessionProfileMenu"))}">
+                  ${getWorkspaceNewSessionProfileItems()
+                    .map((item) => {
+                      const active = item.name === getWorkspaceNewSessionProfileName();
+                      return `
+                        <button
+                          type="button"
+                          class="workspace-sidebar-new-session-option ${active ? "workspace-sidebar-new-session-option-active" : ""}"
+                          data-workspace-new-session-profile="${escapeHtml(item.name)}"
+                          role="menuitemradio"
+                          aria-checked="${active ? "true" : "false"}"
+                        >
+                          <span class="workspace-sidebar-new-session-option-check">${active ? "✓" : ""}</span>
+                          <span class="workspace-sidebar-new-session-option-label">${escapeHtml(item.label)}</span>
+                        </button>
+                      `;
+                    })
+                    .join("")}
+                </div>
+              `
+              : ""
+          }
+        </div>
       </div>
 
       <div class="workspace-session-list" id="workspace-session-list">
@@ -2054,6 +2359,7 @@ function renderWorkspaceSidebar(selectedSessionId = "") {
                     >
                       <div class="workspace-session-item-head">
                         <span class="workspace-session-item-title">${escapeHtml(session.title || t("workspace.session.untitled"))}</span>
+                        ${session.appServerId ? `<span class="pill">app-server</span>` : ""}
                         ${showStatusPill ? `<span class="pill ${statusClass(displayStatus)}">${escapeHtml(sessionStatusLabel(displayStatus))}</span>` : ""}
                       </div>
                       <div class="workspace-session-item-meta">
@@ -2119,6 +2425,7 @@ function closeWorkspaceCreateDialog() {
   state.workspace.createDialog.browserParentPath = "";
   state.workspace.createDialog.browserItems = [];
   state.workspace.createDialog.error = "";
+  state.workspace.newSessionProfileMenuOpen = false;
   patchWorkspaceModalSlot();
 }
 
@@ -2139,6 +2446,7 @@ function openWorkspaceCreateSessionDialog() {
   state.workspace.createDialog.browserParentPath = "";
   state.workspace.createDialog.browserItems = [];
   state.workspace.createDialog.error = "";
+  state.workspace.newSessionProfileMenuOpen = false;
   patchWorkspaceModalSlot();
 }
 
@@ -2471,11 +2779,14 @@ function bindWorkspaceCreateDialogControls() {
 }
 
 function bindWorkspaceSidebarControls(selectedSessionId = "") {
+  ensureWorkspaceSidebarGlobalListeners();
+
   const toggleButton = document.querySelector("#workspace-sidebar-toggle");
   if (toggleButton instanceof HTMLButtonElement) {
     toggleButton.onclick = () => {
       state.workspace.sidebarCollapsed = !state.workspace.sidebarCollapsed;
       state.workspace.localeMenuOpen = false;
+      state.workspace.newSessionProfileMenuOpen = false;
       writeWorkspaceUiState();
       syncWorkspaceShellState();
       patchWorkspaceSidebar(selectedSessionId);
@@ -2485,15 +2796,16 @@ function bindWorkspaceSidebarControls(selectedSessionId = "") {
   const overlay = document.querySelector("#workspace-sidebar-overlay");
   if (overlay instanceof HTMLElement) {
     overlay.onclick = () => {
-      if (state.workspace.sidebarCollapsed) {
-        return;
-      }
-      state.workspace.sidebarCollapsed = true;
-      state.workspace.localeMenuOpen = false;
-      writeWorkspaceUiState();
-      syncWorkspaceShellState();
-      patchWorkspaceSidebar(selectedSessionId);
-    };
+    if (state.workspace.sidebarCollapsed) {
+      return;
+    }
+    state.workspace.sidebarCollapsed = true;
+    state.workspace.localeMenuOpen = false;
+    state.workspace.newSessionProfileMenuOpen = false;
+    writeWorkspaceUiState();
+    syncWorkspaceShellState();
+    patchWorkspaceSidebar(selectedSessionId);
+  };
   }
 
   const closeButton = document.querySelector("#workspace-sidebar-close");
@@ -2501,6 +2813,7 @@ function bindWorkspaceSidebarControls(selectedSessionId = "") {
     closeButton.onclick = () => {
       state.workspace.sidebarCollapsed = true;
       state.workspace.localeMenuOpen = false;
+      state.workspace.newSessionProfileMenuOpen = false;
       writeWorkspaceUiState();
       syncWorkspaceShellState();
       patchWorkspaceSidebar(selectedSessionId);
@@ -2512,6 +2825,9 @@ function bindWorkspaceSidebarControls(selectedSessionId = "") {
     localeToggle.onclick = (event) => {
       event.stopPropagation();
       state.workspace.localeMenuOpen = !state.workspace.localeMenuOpen;
+      if (state.workspace.localeMenuOpen) {
+        state.workspace.newSessionProfileMenuOpen = false;
+      }
       patchWorkspaceSidebar(selectedSessionId);
     };
   }
@@ -2536,18 +2852,43 @@ function bindWorkspaceSidebarControls(selectedSessionId = "") {
   if (createButton instanceof HTMLButtonElement) {
     createButton.onclick = async () => {
       state.workspace.localeMenuOpen = false;
+      state.workspace.newSessionProfileMenuOpen = false;
       try {
-        openWorkspaceCreateSessionDialog();
+        await startWorkspaceNewSessionFromSelectedProfile(selectedSessionId);
       } catch (error) {
         showToast(messageOf(error));
       }
     };
   }
 
+  const profileToggle = document.querySelector("#workspace-new-session-profile-toggle");
+  if (profileToggle instanceof HTMLButtonElement) {
+    profileToggle.onclick = (event) => {
+      event.stopPropagation();
+      state.workspace.newSessionProfileMenuOpen = !state.workspace.newSessionProfileMenuOpen;
+      if (state.workspace.newSessionProfileMenuOpen) {
+        state.workspace.localeMenuOpen = false;
+      }
+      patchWorkspaceSidebar(selectedSessionId);
+    };
+  }
+
+  document.querySelectorAll("[data-workspace-new-session-profile]").forEach((button) => {
+    if (!(button instanceof HTMLButtonElement)) {
+      return;
+    }
+
+    button.onclick = () => {
+      const profileName = String(button.dataset.workspaceNewSessionProfile || "");
+      setWorkspaceNewSessionProfile(profileName, selectedSessionId);
+    };
+  });
+
   const importButton = document.querySelector("#workspace-import-session");
   if (importButton instanceof HTMLButtonElement) {
     importButton.onclick = async () => {
       state.workspace.localeMenuOpen = false;
+      state.workspace.newSessionProfileMenuOpen = false;
       try {
         await handleImportCodexSession();
       } catch (error) {
@@ -2560,7 +2901,8 @@ function bindWorkspaceSidebarControls(selectedSessionId = "") {
   if (emptyCreateButton instanceof HTMLButtonElement) {
     emptyCreateButton.onclick = async () => {
       try {
-        openWorkspaceCreateSessionDialog();
+        state.workspace.newSessionProfileMenuOpen = false;
+        await startWorkspaceNewSessionFromSelectedProfile(selectedSessionId);
       } catch (error) {
         showToast(messageOf(error));
       }
@@ -2571,6 +2913,7 @@ function bindWorkspaceSidebarControls(selectedSessionId = "") {
   if (emptyImportButton instanceof HTMLButtonElement) {
     emptyImportButton.onclick = async () => {
       try {
+        state.workspace.newSessionProfileMenuOpen = false;
         await handleImportCodexSession();
       } catch (error) {
         showToast(messageOf(error));
@@ -3257,6 +3600,7 @@ async function renderSessionDetailPage(sessionId) {
   if (previousSessionId !== normalizedSessionId) {
     state.detail.dismissedApprovalKeys = {};
     state.detail.clientLogs = [];
+    state.detail.startingPrompt = "";
   }
 
   state.workspace.activeSessionId = normalizedSessionId;
@@ -3289,11 +3633,12 @@ async function renderSessionDetailPage(sessionId) {
       return;
     }
 
-    const [session, eventData, uiOptionsResult, hostsResult] = await Promise.all([
+    const [session, eventData, uiOptionsResult, hostsResult, profilesResult] = await Promise.all([
       getSession(normalizedSessionId),
       loadInitialSessionEvents(normalizedSessionId),
       getCodexUiOptions().catch(() => null),
       getCodexHosts().catch(() => null),
+      getProfiles().catch(() => null),
     ]);
     if (isStaleDetailLoad()) {
       return;
@@ -3339,6 +3684,12 @@ async function renderSessionDetailPage(sessionId) {
     state.detail.rawStdoutBuckets = {};
     state.detail.codexUiOptions = uiOptions;
     state.detail.codexLaunch = normalizeCodexLaunchAgainstUi(loadCodexLaunchPrefs(), uiOptions);
+    state.detail.startingPrompt = normalizeSessionStartingPrompt(session.startingPrompt || "");
+    state.detail.composerRefreshRequested = false;
+    state.workspace.profiles =
+      profilesResult && Array.isArray(profilesResult.items)
+        ? profilesResult.items.filter((profile) => profile && typeof profile.name === "string")
+        : [];
     state.detail.remoteHosts =
       hostsResult && Array.isArray(hostsResult.hosts)
         ? hostsResult.hosts.filter((item) => typeof item === "string" && item.trim())
@@ -3601,10 +3952,12 @@ function renderSessionDetail() {
     (!shellMounted ||
       !composerFocused ||
       state.detail.voiceRecording ||
-      state.detail.voiceTranscribing)
+      state.detail.voiceTranscribing ||
+      state.detail.composerRefreshRequested)
   ) {
     composerSlot.innerHTML = composerInputHtml;
     state.detail.lastComposerHtml = composerInputHtml;
+    state.detail.composerRefreshRequested = false;
   }
 
   const composerTextarea = document.querySelector('textarea[name="content"]');
@@ -3635,6 +3988,7 @@ function renderSessionDetail() {
     const promptText = String(content || "").trim();
     const clearDraft = options.clearDraft !== false;
     const restoreDraftOnError = options.restoreDraftOnError !== false;
+    const restoreDraftText = String(options.restoreDraftText ?? promptText).trim();
     if (!promptText) {
       return;
     }
@@ -3722,7 +4076,7 @@ function renderSessionDetail() {
         error: messageOf(error),
       });
       clearOptimisticSend({
-        restoreDraft: restoreDraftOnError ? promptText : "",
+        restoreDraft: restoreDraftOnError ? restoreDraftText : "",
         restoreSession: true,
         restoreTitle: true,
       });
@@ -3735,17 +4089,28 @@ function renderSessionDetail() {
 
   async function sendComposerMessage() {
     const content = String(composerTextarea?.value || "").trim();
+    const finalContent = composeMessageContentWithStartingPrompt(
+      content,
+      state.detail.startingPrompt,
+    );
+    if (state.detail.startingPrompt) {
+      state.detail.startingPrompt = "";
+      state.detail.composerRefreshRequested = true;
+      scheduleSessionDetailRender();
+    }
     const codex = buildCodexLaunchPayload(
       state.detail.codexLaunch,
       state.detail.codexUiOptions,
     );
-    const payload = codex ? { content, codex } : { content };
+    const payload = codex ? { content: finalContent, codex } : { content: finalContent };
     pushClientDebugLog("debug", "Dispatching composer message", {
       sessionId: session.sessionId,
-      contentLength: content.length,
+      contentLength: finalContent.length,
       hasCodexOverrides: Boolean(codex),
     });
-    await submitPromptContent(content, () => sendMessage(session.sessionId, payload));
+    await submitPromptContent(finalContent, () => sendMessage(session.sessionId, payload), {
+      restoreDraftText: content,
+    });
   }
 
   async function startVoiceRecording() {
@@ -3823,10 +4188,19 @@ function renderSessionDetail() {
       state.detail.voiceTranscribing = false;
       syncComposerActionState();
       scheduleSessionDetailRender();
-      await submitPromptContent(
+      const finalTranscript = composeMessageContentWithStartingPrompt(
         result.transcript,
+        state.detail.startingPrompt,
+      );
+      if (state.detail.startingPrompt) {
+        state.detail.startingPrompt = "";
+        state.detail.composerRefreshRequested = true;
+        scheduleSessionDetailRender();
+      }
+      await submitPromptContent(
+        finalTranscript,
         () => Promise.resolve(result),
-        { clearDraft: false, restoreDraftOnError: false },
+        { clearDraft: false, restoreDraftOnError: false, restoreDraftText: result.transcript },
       );
     } catch (error) {
       state.detail.voiceTranscribing = false;
