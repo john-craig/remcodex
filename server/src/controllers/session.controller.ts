@@ -24,6 +24,7 @@ export function createSessionRouter(
       sessionId: session.id,
       title: session.title,
       projectId: session.project_id,
+      parentSessionId: session.parent_session_id,
       status: session.status,
       liveBusy: sessionManager.isLiveBusy(session.id),
       codexThreadId: session.codex_thread_id,
@@ -63,16 +64,23 @@ export function createSessionRouter(
 
   router.post("/", (request, response, next) => {
     try {
-      const body = request.body as { title?: string; projectId?: string; startingPrompt?: string };
+      const body = request.body as {
+        title?: string;
+        projectId?: string;
+        startingPrompt?: string;
+        parentSessionId?: string;
+      };
       const session = sessionManager.createSession({
         title: body.title,
         projectId: body.projectId ?? "",
         startingPrompt: body.startingPrompt,
+        parentSessionId: body.parentSessionId,
       });
 
       response.status(201).json({
         sessionId: session.id,
         status: session.status,
+        parentSessionId: session.parent_session_id,
         startingPrompt: session.starting_prompt,
       });
     } catch (error) {
@@ -94,6 +102,7 @@ export function createSessionRouter(
         sessionId: session.id,
         title: session.title,
         projectId: session.project_id,
+        parentSessionId: session.parent_session_id,
         projectName: project?.name ?? null,
         projectPath: project?.path ?? null,
         status: session.status,

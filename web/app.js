@@ -63,6 +63,8 @@ const app = document.querySelector("#app");
 const SESSION_VIEW_STORAGE_KEY = "remote-agent-console.sessions.view";
 const CODEX_QUOTA_CACHE_PREFIX = "remote-agent-console.codexQuota:";
 const WORKSPACE_UI_STORAGE_KEY = "remote-agent-console.workspace.ui";
+const WORKSPACE_SESSION_EXPANDED_STORAGE_KEY = "remote-agent-console.workspace.expandedSessions.v1";
+const WORKSPACE_SESSION_COLLAPSED_STORAGE_KEY = "remote-agent-console.workspace.collapsedSessions.v1";
 const WORKSPACE_NEW_SESSION_PROFILE_STORAGE_KEY = "remote-agent-console.workspace.newSessionProfile.v1";
 const WORKSPACE_SESSION_STARTING_PROMPT_STORAGE_PREFIX =
   "remote-agent-console.workspace.sessionStartingPrompt.v1:";
@@ -317,6 +319,97 @@ function writeWorkspaceUiState() {
     );
   } catch {
     /* ignore */
+  }
+}
+
+function readWorkspaceExpandedSessionIds() {
+  try {
+    const raw = window.localStorage?.getItem(WORKSPACE_SESSION_EXPANDED_STORAGE_KEY) || "";
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return {};
+    }
+    return parsed.reduce((acc, value) => {
+      const sessionId = String(value || "").trim();
+      if (sessionId) {
+        acc[sessionId] = true;
+      }
+      return acc;
+    }, {});
+  } catch {
+    return {};
+  }
+}
+
+function readWorkspaceCollapsedSessionIds() {
+  try {
+    const raw = window.localStorage?.getItem(WORKSPACE_SESSION_COLLAPSED_STORAGE_KEY) || "";
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return {};
+    }
+    return parsed.reduce((acc, value) => {
+      const sessionId = String(value || "").trim();
+      if (sessionId) {
+        acc[sessionId] = true;
+      }
+      return acc;
+    }, {});
+  } catch {
+    return {};
+  }
+}
+
+function writeWorkspaceExpandedSessionIds() {
+  try {
+    window.localStorage?.setItem(
+      WORKSPACE_SESSION_EXPANDED_STORAGE_KEY,
+      JSON.stringify(Object.keys(state.workspace.expandedSessionIds || {}).filter((sessionId) => state.workspace.expandedSessionIds[sessionId])),
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+function writeWorkspaceCollapsedSessionIds() {
+  try {
+    window.localStorage?.setItem(
+      WORKSPACE_SESSION_COLLAPSED_STORAGE_KEY,
+      JSON.stringify(Object.keys(state.workspace.collapsedSessionIds || {}).filter((sessionId) => state.workspace.collapsedSessionIds[sessionId])),
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+function setWorkspaceSessionExpanded(sessionId, expanded, selectedSessionId = state.workspace.activeSessionId) {
+  const normalizedSessionId = String(sessionId || "").trim();
+  if (!normalizedSessionId) {
+    return;
+  }
+
+  const next = { ...(state.workspace.expandedSessionIds || {}) };
+  const nextCollapsed = { ...(state.workspace.collapsedSessionIds || {}) };
+  if (expanded) {
+    next[normalizedSessionId] = true;
+    delete nextCollapsed[normalizedSessionId];
+  } else {
+    delete next[normalizedSessionId];
+    nextCollapsed[normalizedSessionId] = true;
+  }
+  state.workspace.expandedSessionIds = next;
+  state.workspace.collapsedSessionIds = nextCollapsed;
+  writeWorkspaceExpandedSessionIds();
+  writeWorkspaceCollapsedSessionIds();
+  patchWorkspaceSidebar(selectedSessionId);
+  if (parseHashRoute(window.location.hash || "").path === "#/sessions") {
+    renderSessionsList();
   }
 }
 
@@ -1522,6 +1615,8 @@ const state = {
     newSessionProfileMenuOpen: false,
     activeSessionId: "",
     profiles: [],
+    expandedSessionIds: readWorkspaceExpandedSessionIds(),
+    collapsedSessionIds: readWorkspaceCollapsedSessionIds(),
     createDialog: {
       open: false,
       mode: "pick-project",
@@ -1673,7 +1768,7 @@ function resolveWorkspaceSessionId(routeSessionId) {
     return state.workspace.activeSessionId;
   }
 
-  return getWorkspaceFilteredSessions()[0]?.sessionId || state.sessions.items[0]?.sessionId || "";
+  return buildWorkspaceSessionRows(state.sessions.items, state.sessions, "")[0]?.session.sessionId || state.sessions.items[0]?.sessionId || "";
 }
 
 function renderWorkspaceEmptyState() {
@@ -1820,6 +1915,180 @@ function setWorkspaceNewSessionProfile(profileName, selectedSessionId = state.wo
   patchWorkspaceSidebar(selectedSessionId);
 }
 
+function getSessionParentId(session) {
+  return String(session?.parentSessionId || session?.parent_session_id || "").trim();
+}
+
+function getWorkspaceSessionAncestorIds(sessionId, sessionMap) {
+  const ancestors = new Set();
+  const visited = new Set();
+  let currentId = String(sessionId || "").trim();
+
+  while (currentId && !visited.has(currentId)) {
+    visited.add(currentId);
+    const currentSession = sessionMap.get(currentId);
+    if (!currentSession) {
+      break;
+    }
+
+    const parentId = getSessionParentId(currentSession);
+    if (!parentId) {
+      break;
+    }
+
+    ancestors.add(parentId);
+    currentId = parentId;
+  }
+
+  return ancestors;
+}
+
+function buildWorkspaceSessionRows(sessions, filters, selectedSessionId = "") {
+  const projectMap = new Map(state.sessions.projects.map((project) => [project.projectId, project]));
+  const sessionMap = new Map(sessions.map((session) => [session.sessionId, session]));
+  const directVisibility = new Map();
+  const includedCache = new Map();
+  const childrenMap = new Map();
+
+  for (const session of sessions) {
+    const parentId = getSessionParentId(session);
+    if (!parentId || !sessionMap.has(parentId)) {
+      continue;
+    }
+
+    const children = childrenMap.get(parentId) || [];
+    children.push(session);
+    childrenMap.set(parentId, children);
+  }
+
+  const sortKey = String(filters?.sort || state.sessions.sort || "activity_desc");
+
+  function isDirectlyVisible(session) {
+    const sessionId = String(session?.sessionId || "").trim();
+    if (!sessionId) {
+      return false;
+    }
+    if (directVisibility.has(sessionId)) {
+      return directVisibility.get(sessionId);
+    }
+
+    const visible = matchesSessionFilters(session, projectMap.get(session.projectId), filters);
+    directVisibility.set(sessionId, visible);
+    return visible;
+  }
+
+  function hasIncludedDescendant(sessionId) {
+    const normalizedSessionId = String(sessionId || "").trim();
+    if (!normalizedSessionId) {
+      return false;
+    }
+    if (includedCache.has(normalizedSessionId)) {
+      return includedCache.get(normalizedSessionId);
+    }
+
+    const descendants = sortSessions(childrenMap.get(normalizedSessionId) || [], sortKey);
+    const included = descendants.some((child) => isDirectlyVisible(child) || hasIncludedDescendant(child.sessionId));
+    includedCache.set(normalizedSessionId, included);
+    return included;
+  }
+
+  const forcedExpandedIds = getWorkspaceSessionAncestorIds(selectedSessionId, sessionMap);
+  const rows = [];
+
+  function visit(items, level) {
+    for (const session of sortSessions(items, sortKey)) {
+      const included = isDirectlyVisible(session) || hasIncludedDescendant(session.sessionId);
+      if (!included) {
+        continue;
+      }
+
+      const childItems = sortSessions(childrenMap.get(session.sessionId) || [], sortKey).filter(
+        (child) => isDirectlyVisible(child) || hasIncludedDescendant(child.sessionId),
+      );
+      const hasChildren = childItems.length > 0;
+      const collapsed = Boolean(state.workspace.collapsedSessionIds?.[session.sessionId]);
+      const expanded =
+        hasChildren &&
+        !collapsed &&
+        (forcedExpandedIds.has(session.sessionId) || Boolean(state.workspace.expandedSessionIds?.[session.sessionId]));
+
+      rows.push({
+        session,
+        level,
+        hasChildren,
+        expanded,
+        directVisible: isDirectlyVisible(session),
+      });
+
+      if (hasChildren && expanded) {
+        visit(childItems, level + 1);
+      }
+    }
+  }
+
+  const rootItems = sessions.filter((session) => {
+    const parentId = getSessionParentId(session);
+    return !parentId || !sessionMap.has(parentId);
+  });
+  visit(rootItems, 0);
+  return rows;
+}
+
+function renderWorkspaceSessionRow(row, selectedSessionId = "", selectedSessionIdSet = null) {
+  const session = row.session;
+  const project = state.sessions.projects.find((candidate) => candidate.projectId === session.projectId);
+  const displayStatus = getSessionDisplayStatus(session);
+  const showStatusPill = ["starting", "running", "stopping", "failed"].includes(displayStatus);
+  const isSelected = session.sessionId === selectedSessionId;
+  const indentStyle = row.level > 0 ? ` style="--session-indent:${row.level}"` : "";
+  const childClass = row.level > 0 ? " workspace-session-item--child" : "";
+  const directVisibleClass = row.directVisible ? "" : " workspace-session-item--ancestor";
+
+  return `
+    <div class="workspace-session-item-row"${indentStyle}>
+      <button
+        type="button"
+        class="workspace-session-item ${isSelected ? "workspace-session-item-active" : ""}${childClass}${directVisibleClass}"
+        data-open-session="${session.sessionId}"
+      >
+        <div class="workspace-session-item-head">
+          ${
+            row.hasChildren
+              ? `
+                <span
+                  role="button"
+                  tabindex="0"
+                  class="workspace-session-item-toggle"
+                  data-toggle-session-tree="${escapeHtml(session.sessionId)}"
+                  aria-label="${escapeHtml(row.expanded ? t("generic.collapse") : t("generic.expand"))}"
+                  aria-expanded="${row.expanded ? "true" : "false"}"
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                    <path d="${row.expanded ? "M8 10l4 4 4-4" : "M10 6 16 12 10 18"}"></path>
+                  </svg>
+                </span>
+              `
+              : `<span class="workspace-session-item-toggle workspace-session-item-toggle-spacer" aria-hidden="true"></span>`
+          }
+          <span class="workspace-session-item-title">${escapeHtml(session.title || t("workspace.session.untitled"))}</span>
+          ${session.appServerId ? `<span class="pill">app-server</span>` : ""}
+          ${showStatusPill ? `<span class="pill ${statusClass(displayStatus)}">${escapeHtml(sessionStatusLabel(displayStatus))}</span>` : ""}
+        </div>
+        <div class="workspace-session-item-meta">
+          <span>${escapeHtml(project?.name || session.projectId)}</span>
+        </div>
+        ${
+          session.lastAssistantContent
+            ? `<div class="workspace-session-item-preview">${escapeHtml(shortenText(session.lastAssistantContent, 90))}</div>`
+            : session.lastCommand
+              ? `<div class="workspace-session-item-preview">${escapeHtml(shortenText(session.lastCommand, 90))}</div>`
+              : ""
+        }
+      </button>
+    </div>
+  `;
+}
+
 async function createWorkspaceSessionForProjectPath(projectPath, startingPrompt = "") {
   const normalizedProjectPath = normalizeProjectPathForComparison(projectPath);
   if (!normalizedProjectPath) {
@@ -1901,28 +2170,53 @@ function ensureWorkspaceSidebarGlobalListeners() {
 
   window.__workspaceSidebarListenersBound = true;
 
-  document.addEventListener("click", (event) => {
-    const target = event.target instanceof Element ? event.target : null;
-    if (!target) {
-      return;
-    }
+  document.addEventListener(
+    "click",
+    (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target) {
+        return;
+      }
 
-    if (state.workspace.localeMenuOpen && !target.closest(".workspace-sidebar-locale")) {
-      state.workspace.localeMenuOpen = false;
-      patchWorkspaceSidebar(state.workspace.activeSessionId);
-      return;
-    }
+      const treeToggle = target.closest("[data-toggle-session-tree]");
+      if (treeToggle) {
+        event.preventDefault();
+        event.stopPropagation();
+        const sessionId = treeToggle.getAttribute("data-toggle-session-tree") || "";
+        const isExpanded = treeToggle.getAttribute("aria-expanded") === "true";
+        setWorkspaceSessionExpanded(sessionId, !isExpanded, state.workspace.activeSessionId);
+        return;
+      }
 
-    if (
-      state.workspace.newSessionProfileMenuOpen &&
-      !target.closest(".workspace-sidebar-new-session-group")
-    ) {
-      state.workspace.newSessionProfileMenuOpen = false;
-      patchWorkspaceSidebar(state.workspace.activeSessionId);
-    }
-  });
+      if (state.workspace.localeMenuOpen && !target.closest(".workspace-sidebar-locale")) {
+        state.workspace.localeMenuOpen = false;
+        patchWorkspaceSidebar(state.workspace.activeSessionId);
+        return;
+      }
+
+      if (
+        state.workspace.newSessionProfileMenuOpen &&
+        !target.closest(".workspace-sidebar-new-session-group")
+      ) {
+        state.workspace.newSessionProfileMenuOpen = false;
+        patchWorkspaceSidebar(state.workspace.activeSessionId);
+      }
+    },
+    true,
+  );
 
   document.addEventListener("keydown", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const treeToggle = target?.closest("[data-toggle-session-tree]") || null;
+    if (treeToggle && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      event.stopPropagation();
+      const sessionId = treeToggle.getAttribute("data-toggle-session-tree") || "";
+      const isExpanded = treeToggle.getAttribute("aria-expanded") === "true";
+      setWorkspaceSessionExpanded(sessionId, !isExpanded, state.workspace.activeSessionId);
+      return;
+    }
+
     if (event.key !== "Escape") {
       return;
     }
@@ -2232,8 +2526,7 @@ function renderWorkspaceModalSlot() {
 }
 
 function renderWorkspaceSidebar(selectedSessionId = "") {
-  const projectMap = new Map(state.sessions.projects.map((project) => [project.projectId, project]));
-  const filteredSessions = getWorkspaceFilteredSessions();
+  const workspaceSessionRows = buildWorkspaceSessionRows(state.sessions.items, state.sessions, selectedSessionId);
   const localeOptions = listSupportedLocales();
 
   return `
@@ -2344,38 +2637,8 @@ function renderWorkspaceSidebar(selectedSessionId = "") {
 
       <div class="workspace-session-list" id="workspace-session-list">
         ${
-          filteredSessions.length > 0
-            ? filteredSessions
-                .map((session) => {
-                  const project = projectMap.get(session.projectId);
-                  const displayStatus = getSessionDisplayStatus(session);
-                  const showStatusPill = ["starting", "running", "stopping", "failed"].includes(displayStatus);
-                  const selected = session.sessionId === selectedSessionId;
-                  return `
-                    <button
-                      type="button"
-                      class="workspace-session-item ${selected ? "workspace-session-item-active" : ""}"
-                      data-open-session="${session.sessionId}"
-                    >
-                      <div class="workspace-session-item-head">
-                        <span class="workspace-session-item-title">${escapeHtml(session.title || t("workspace.session.untitled"))}</span>
-                        ${session.appServerId ? `<span class="pill">app-server</span>` : ""}
-                        ${showStatusPill ? `<span class="pill ${statusClass(displayStatus)}">${escapeHtml(sessionStatusLabel(displayStatus))}</span>` : ""}
-                      </div>
-                      <div class="workspace-session-item-meta">
-                        <span>${escapeHtml(project?.name || session.projectId)}</span>
-                      </div>
-                      ${
-                        session.lastAssistantContent
-                          ? `<div class="workspace-session-item-preview">${escapeHtml(shortenText(session.lastAssistantContent, 90))}</div>`
-                          : session.lastCommand
-                            ? `<div class="workspace-session-item-preview">${escapeHtml(shortenText(session.lastCommand, 90))}</div>`
-                            : ""
-                      }
-                    </button>
-                  `;
-                })
-                .join("")
+          workspaceSessionRows.length > 0
+            ? workspaceSessionRows.map((row) => renderWorkspaceSessionRow(row, selectedSessionId)).join("")
             : `<div class="workspace-session-empty">${escapeHtml(t("workspace.sidebar.empty"))}</div>`
         }
       </div>
@@ -3245,23 +3508,24 @@ async function handleImportCodexSession() {
 }
 
 function renderSessionsList() {
+  ensureWorkspaceSidebarGlobalListeners();
   const projectMap = new Map(state.sessions.projects.map((project) => [project.projectId, project]));
   const filteredSessions = state.sessions.items.filter((session) =>
     matchesSessionFilters(session, projectMap.get(session.projectId), state.sessions),
   );
+  const sessionRows = buildWorkspaceSessionRows(state.sessions.items, state.sessions, "");
   const statusOptions = getSessionStatusOptions(state.sessions.items);
   const projectOptions = getSessionProjectOptions(state.sessions.projects, state.sessions.items);
   const threadOptions = getThreadFilterOptions(state.sessions.items);
   const sortOptions = getSessionSortOptions();
   const activeFilters = countActiveSessionFilters(state.sessions);
-  const sortedSessions = sortSessions(filteredSessions, state.sessions.sort);
-  const totalPages = getPageCount(sortedSessions.length, state.sessions.pageSize);
+  const totalPages = getPageCount(sessionRows.length, state.sessions.pageSize);
   state.sessions.page = clampPage(state.sessions.page, totalPages);
   const pageStart = (state.sessions.page - 1) * state.sessions.pageSize;
-  const pagedSessions = sortedSessions.slice(pageStart, pageStart + state.sessions.pageSize);
+  const pagedSessions = sessionRows.slice(pageStart, pageStart + state.sessions.pageSize);
   const pageNumbers = getVisiblePageNumbers(state.sessions.page, totalPages);
-  const pageEnd = sortedSessions.length
-    ? Math.min(pageStart + state.sessions.pageSize, sortedSessions.length)
+  const pageEnd = sessionRows.length
+    ? Math.min(pageStart + state.sessions.pageSize, sessionRows.length)
     : 0;
   persistSessionsViewState();
 
@@ -3374,48 +3638,74 @@ function renderSessionsList() {
           ${
             pagedSessions.length > 0
               ? pagedSessions
-                  .map((session) => {
+                  .map((row) => {
+                    const session = row.session;
                     const project = projectMap.get(session.projectId);
                     const displayStatus = getSessionDisplayStatus(session);
+                    const isSelected = state.workspace.activeSessionId === session.sessionId;
                     return `
-                      <article class="record-card session-card list-row-card" data-open-session="${session.sessionId}">
-                        <div class="record-title-row">
-                          <h3>${escapeHtml(session.title || t("workspace.session.untitled"))}</h3>
-                          <span class="pill ${statusClass(displayStatus)}">${escapeHtml(sessionStatusLabel(displayStatus))}</span>
-                        </div>
-                        <p class="record-meta">${escapeHtml(t("sessions.projectMeta", { value: project?.name || session.projectId }))}</p>
-                        <p class="record-meta">${escapeHtml(t("sessions.lastEventMeta", { value: session.lastEventAt || t("generic.none") }))}</p>
-                        <div class="summary-strip">
-                          <span class="summary-chip">${escapeHtml(t("sessions.eventCount", { count: session.eventCount ?? 0 }))}</span>
+                      <div class="session-tree-row" ${row.level > 0 ? `style="--session-indent:${row.level}"` : ""}>
+                        <button
+                          type="button"
+                          class="workspace-session-item session-card list-row-card ${isSelected ? "workspace-session-item-active" : ""}${row.level > 0 ? " workspace-session-item--child" : ""}${row.directVisible ? "" : " workspace-session-item--ancestor"}"
+                          data-open-session="${session.sessionId}"
+                        >
+                          <div class="record-title-row">
+                            ${
+                              row.hasChildren
+                                ? `
+                                  <span
+                                    role="button"
+                                    tabindex="0"
+                                    class="workspace-session-item-toggle"
+                                    data-toggle-session-tree="${escapeHtml(session.sessionId)}"
+                                    aria-label="${escapeHtml(row.expanded ? t("generic.collapse") : t("generic.expand"))}"
+                                    aria-expanded="${row.expanded ? "true" : "false"}"
+                                  >
+                                    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                                      <path d="${row.expanded ? "M8 10l4 4 4-4" : "M10 6 16 12 10 18"}"></path>
+                                    </svg>
+                                  </span>
+                                `
+                                : `<span class="workspace-session-item-toggle workspace-session-item-toggle-spacer" aria-hidden="true"></span>`
+                            }
+                            <h3>${escapeHtml(session.title || t("workspace.session.untitled"))}</h3>
+                            <span class="pill ${statusClass(displayStatus)}">${escapeHtml(sessionStatusLabel(displayStatus))}</span>
+                          </div>
+                          <p class="record-meta">${escapeHtml(t("sessions.projectMeta", { value: project?.name || session.projectId }))}</p>
+                          <p class="record-meta">${escapeHtml(t("sessions.lastEventMeta", { value: session.lastEventAt || t("generic.none") }))}</p>
+                          <div class="summary-strip">
+                            <span class="summary-chip">${escapeHtml(t("sessions.eventCount", { count: session.eventCount ?? 0 }))}</span>
+                            ${
+                              session.codexThreadId
+                                ? `<span class="summary-chip">${escapeHtml(t("sessions.threadReady"))}</span>`
+                                : `<span class="summary-chip">${escapeHtml(t("sessions.threadMissing"))}</span>`
+                            }
+                            ${
+                              session.pendingApproval
+                                ? `<span class="summary-chip summary-chip-warn">${escapeHtml(t("sessions.pendingApproval"))}</span>`
+                                : ""
+                            }
+                          </div>
                           ${
-                            session.codexThreadId
-                              ? `<span class="summary-chip">${escapeHtml(t("sessions.threadReady"))}</span>`
-                              : `<span class="summary-chip">${escapeHtml(t("sessions.threadMissing"))}</span>`
+                            session.pendingApproval?.reason
+                              ? `<p class="record-summary"><strong>${escapeHtml(t("sessions.pendingApprovalTitle"))}</strong> ${escapeHtml(shortenText(session.pendingApproval.reason, 120))}</p>`
+                              : session.pendingApproval?.command
+                                ? `<p class="record-summary"><strong>${escapeHtml(t("sessions.pendingApprovalTitle"))}</strong> ${escapeHtml(shortenText(session.pendingApproval.command, 120))}</p>`
+                                : ""
                           }
                           ${
-                            session.pendingApproval
-                              ? `<span class="summary-chip summary-chip-warn">${escapeHtml(t("sessions.pendingApproval"))}</span>`
+                            session.lastCommand
+                              ? `<p class="record-summary"><strong>${escapeHtml(t("sessions.lastCommandTitle"))}</strong> ${escapeHtml(shortenText(session.lastCommand, 120))}</p>`
                               : ""
                           }
-                        </div>
-                        ${
-                          session.pendingApproval?.reason
-                            ? `<p class="record-summary"><strong>${escapeHtml(t("sessions.pendingApprovalTitle"))}</strong> ${escapeHtml(shortenText(session.pendingApproval.reason, 120))}</p>`
-                            : session.pendingApproval?.command
-                              ? `<p class="record-summary"><strong>${escapeHtml(t("sessions.pendingApprovalTitle"))}</strong> ${escapeHtml(shortenText(session.pendingApproval.command, 120))}</p>`
+                          ${
+                            session.lastAssistantContent
+                              ? `<p class="record-summary"><strong>${escapeHtml(t("sessions.lastReplyTitle"))}</strong> ${escapeHtml(shortenText(session.lastAssistantContent, 140))}</p>`
                               : ""
-                        }
-                        ${
-                          session.lastCommand
-                            ? `<p class="record-summary"><strong>${escapeHtml(t("sessions.lastCommandTitle"))}</strong> ${escapeHtml(shortenText(session.lastCommand, 120))}</p>`
-                            : ""
-                        }
-                        ${
-                          session.lastAssistantContent
-                            ? `<p class="record-summary"><strong>${escapeHtml(t("sessions.lastReplyTitle"))}</strong> ${escapeHtml(shortenText(session.lastAssistantContent, 140))}</p>`
-                            : ""
-                        }
-                      </article>
+                          }
+                        </button>
+                      </div>
                     `;
                   })
                   .join("")
@@ -3424,7 +3714,7 @@ function renderSessionsList() {
         </div>
 
         ${
-          sortedSessions.length > 0
+          sessionRows.length > 0
             ? `
               <div class="session-pagination">
                 <div class="session-page-meta">
@@ -3432,7 +3722,7 @@ function renderSessionsList() {
                     t("sessions.pageRange", {
                       start: pageStart + 1,
                       end: pageEnd,
-                      total: sortedSessions.length,
+                      total: sessionRows.length,
                     }),
                   )}</span>
                   <span>${escapeHtml(

@@ -553,6 +553,52 @@ body {
   grid-auto-rows: max-content;
 }
 
+.workspace-session-item-row,
+.session-tree-row {
+  display: block;
+  min-width: 0;
+  padding-left: calc(var(--session-indent, 0) * 0.82rem);
+}
+
+.workspace-session-item-row + .workspace-session-item-row,
+.session-tree-row + .session-tree-row {
+  margin-top: 0.02rem;
+}
+
+.workspace-session-item-toggle {
+  width: 1.15rem;
+  height: 1.15rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(91, 84, 71, 0.76);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.workspace-session-item-toggle:hover {
+  color: rgba(35, 33, 29, 0.92);
+  background: rgba(188, 90, 48, 0.08);
+  transform: translateY(-1px);
+}
+
+.workspace-session-item-toggle svg {
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.workspace-session-item-toggle-spacer {
+  pointer-events: none;
+}
+
 .workspace-session-item {
   width: 100%;
   display: grid;
@@ -568,6 +614,34 @@ body {
   transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
 }
 
+.workspace-session-item-head {
+  display: grid;
+  grid-template-columns: 1.15rem minmax(0, 1fr) auto auto;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.workspace-session-item-head .workspace-session-item-toggle {
+  justify-self: center;
+}
+
+.workspace-session-item--child {
+  padding-top: 0.66rem;
+  padding-bottom: 0.66rem;
+  background: rgba(255, 255, 255, 0.5);
+  border-color: rgba(112, 82, 42, 0.05);
+  color: rgba(35, 33, 29, 0.88);
+}
+
+.workspace-session-item--child .workspace-session-item-title,
+.workspace-session-item--child .record-title-row h3 {
+  font-size: 0.84rem;
+}
+
+.workspace-session-item--ancestor {
+  color: rgba(35, 33, 29, 0.92);
+}
+
 .workspace-session-item:hover {
   border-color: rgba(143, 63, 27, 0.16);
   background: rgba(255, 255, 255, 0.76);
@@ -578,15 +652,6 @@ body {
   border-color: rgba(188, 90, 48, 0.24);
   background: rgba(255, 245, 238, 0.92);
   box-shadow: inset 0 0 0 1px rgba(188, 90, 48, 0.06);
-}
-
-.workspace-session-item-head,
-.workspace-session-item-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  min-width: 0;
 }
 
 .workspace-session-item-title {
@@ -601,6 +666,11 @@ body {
 }
 
 .workspace-session-item-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
   font-size: 0.72rem;
   line-height: 1.35;
   color: rgba(60, 67, 74, 0.56);
@@ -1333,6 +1403,25 @@ button:hover {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+}
+
+.session-tree-row .record-title-row {
+  display: grid;
+  grid-template-columns: 1.15rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.session-tree-row .record-title-row h3 {
+  min-width: 0;
+}
+
+.session-tree-row .record-title-row .workspace-session-item-toggle {
+  justify-self: center;
+}
+
+.session-tree-row .record-title-row .pill {
+  justify-self: end;
 }
 
 .record-path,

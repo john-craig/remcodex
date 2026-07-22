@@ -199,6 +199,7 @@ export interface SessionRecord {
   status: SessionStatus;
   pid: number | null;
   codex_thread_id: string | null;
+  parent_session_id: string | null;
   starting_prompt: string;
   source_kind: SessionSourceKind;
   source_rollout_path: string | null;

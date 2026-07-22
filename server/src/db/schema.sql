@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   status TEXT NOT NULL,
   pid INTEGER,
   codex_thread_id TEXT,
+  parent_session_id TEXT,
   starting_prompt TEXT NOT NULL DEFAULT '',
   source_kind TEXT NOT NULL DEFAULT 'native',
   source_rollout_path TEXT,
@@ -33,7 +34,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   app_server_pid INTEGER,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  FOREIGN KEY (project_id) REFERENCES projects(id)
+  FOREIGN KEY (project_id) REFERENCES projects(id),
+  FOREIGN KEY (parent_session_id) REFERENCES sessions(id)
 );
 
 CREATE TABLE IF NOT EXISTS session_events (

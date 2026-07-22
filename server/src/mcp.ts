@@ -77,6 +77,7 @@ function serializeSession(
     sessionId: session.id,
     title: session.title,
     projectId: session.project_id,
+    parentSessionId: session.parent_session_id,
     projectName: project?.name ?? null,
     projectPath: project?.path ?? null,
     status: session.status,
@@ -104,6 +105,7 @@ function serializeSessionListItem(
     sessionId: session.id,
     title: session.title,
     projectId: session.project_id,
+    parentSessionId: session.parent_session_id,
     projectName: project?.name ?? null,
     projectPath: project?.path ?? null,
     status: session.status,
@@ -270,14 +272,17 @@ function registerToolserver(
       inputSchema: z.object({
         projectId: z.string().min(1),
         title: z.string().optional(),
+        parentSessionId: z.string().min(1).optional(),
       }),
     },
-    async ({ projectId, title }) => {
+    async ({ projectId, title, parentSessionId }) => {
       try {
         const project = deps.projectManager.getProject(projectId);
         const session =
-          deps.sessionManager.findSessionByProjectPath(project?.path ?? "") ??
-          deps.sessionManager.createSession({ projectId, title });
+          parentSessionId
+            ? deps.sessionManager.createSession({ projectId, title, parentSessionId })
+            : deps.sessionManager.findSessionByProjectPath(project?.path ?? "") ??
+              deps.sessionManager.createSession({ projectId, title });
         return mcpJsonResult(
           serializeSession(session, deps.projectManager, deps.sessionManager.getPendingApproval(session.id)),
         );

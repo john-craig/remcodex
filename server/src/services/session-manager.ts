@@ -202,6 +202,7 @@ export class SessionManager {
             s.status,
             s.pid,
             s.codex_thread_id,
+            s.parent_session_id,
             s.starting_prompt,
             s.source_kind,
             s.source_rollout_path,
@@ -305,6 +306,7 @@ export class SessionManager {
               status,
               pid,
               codex_thread_id,
+              parent_session_id,
               starting_prompt,
               source_kind,
               source_rollout_path,
@@ -356,10 +358,23 @@ export class SessionManager {
     };
   }
 
-  createSession(input: { projectId: string; title?: string; startingPrompt?: string }): SessionRecord {
+  createSession(input: {
+    projectId: string;
+    title?: string;
+    startingPrompt?: string;
+    parentSessionId?: string | null;
+  }): SessionRecord {
     const project = this.options.projectManager.getProject(input.projectId);
     if (!project) {
       throw new AppError(404, "Project not found.");
+    }
+    const parentSessionId = String(input.parentSessionId || "").trim();
+    const parentSession = parentSessionId ? this.getSession(parentSessionId) : null;
+    if (parentSessionId && !parentSession) {
+      throw new AppError(404, "Parent session not found.");
+    }
+    if (parentSession && parentSession.project_id !== project.id) {
+      throw new AppError(400, "Parent session must belong to the same project.");
     }
 
     const timestamp = nowIso();
@@ -370,6 +385,7 @@ export class SessionManager {
       status: "idle",
       pid: null,
       codex_thread_id: null,
+      parent_session_id: parentSession?.id ?? null,
       starting_prompt: normalizeSessionStartingPrompt(input.startingPrompt),
       source_kind: "native",
       source_rollout_path: null,
@@ -394,6 +410,7 @@ export class SessionManager {
             status,
             pid,
             codex_thread_id,
+            parent_session_id,
             starting_prompt,
             source_kind,
             source_rollout_path,
@@ -407,7 +424,7 @@ export class SessionManager {
             created_at,
             updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -417,6 +434,7 @@ export class SessionManager {
         session.status,
         session.pid,
         session.codex_thread_id,
+        session.parent_session_id,
         session.starting_prompt,
         session.source_kind,
         session.source_rollout_path,
