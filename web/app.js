@@ -1919,6 +1919,16 @@ function getSessionParentId(session) {
   return String(session?.parentSessionId || session?.parent_session_id || "").trim();
 }
 
+function renderAppServerLivenessIndicator(session) {
+  if (!session?.appServerId) {
+    return "";
+  }
+
+  const connected = Boolean(session.appServerConnected);
+  const stateLabel = connected ? "connected to interactive TUI" : "previously connected to interactive TUI";
+  return `<span class="session-liveness-indicator session-liveness-indicator-${connected ? "connected" : "disconnected"}" title="${stateLabel}" aria-label="${stateLabel}" role="img"></span>`;
+}
+
 function getWorkspaceSessionAncestorIds(sessionId, sessionMap) {
   const ancestors = new Set();
   const visited = new Set();
@@ -2071,6 +2081,7 @@ function renderWorkspaceSessionRow(row, selectedSessionId = "", selectedSessionI
               : `<span class="workspace-session-item-toggle workspace-session-item-toggle-spacer" aria-hidden="true"></span>`
           }
           <span class="workspace-session-item-title">${escapeHtml(session.title || t("workspace.session.untitled"))}</span>
+          ${renderAppServerLivenessIndicator(session)}
           ${session.appServerId ? `<span class="pill">app-server</span>` : ""}
           ${showStatusPill ? `<span class="pill ${statusClass(displayStatus)}">${escapeHtml(sessionStatusLabel(displayStatus))}</span>` : ""}
         </div>
@@ -3670,6 +3681,7 @@ function renderSessionsList() {
                                 : `<span class="workspace-session-item-toggle workspace-session-item-toggle-spacer" aria-hidden="true"></span>`
                             }
                             <h3>${escapeHtml(session.title || t("workspace.session.untitled"))}</h3>
+                            ${renderAppServerLivenessIndicator(session)}
                             <span class="pill ${statusClass(displayStatus)}">${escapeHtml(sessionStatusLabel(displayStatus))}</span>
                           </div>
                           <p class="record-meta">${escapeHtml(t("sessions.projectMeta", { value: project?.name || session.projectId }))}</p>

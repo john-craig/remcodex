@@ -700,6 +700,23 @@ body {
   line-height: 1;
 }
 
+.session-liveness-indicator {
+  width: 0.62rem;
+  height: 0.62rem;
+  flex: 0 0 auto;
+  display: inline-block;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.7);
+}
+
+.session-liveness-indicator-connected {
+  background: #2d9b5f;
+}
+
+.session-liveness-indicator-disconnected {
+  background: #c94a3d;
+}
+
 .workspace-session-empty {
   padding: 0.85rem 0.4rem;
   font-size: 0.8rem;

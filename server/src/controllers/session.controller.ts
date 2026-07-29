@@ -19,7 +19,8 @@ export function createSessionRouter(
   const router = Router();
 
   router.get("/", async (_request, response) => {
-    await appServerRegistry.sync();
+    const appServers = await appServerRegistry.sync();
+    const liveAppServerIds = new Set(appServers.map((appServer) => appServer.id));
     const items = sessionManager.listSessions().map((session) => ({
       sessionId: session.id,
       title: session.title,
@@ -39,6 +40,7 @@ export function createSessionRouter(
       appServerId: session.app_server_id,
       appServerEndpoint: session.app_server_endpoint,
       appServerPid: session.app_server_pid,
+      appServerConnected: Boolean(session.app_server_id && liveAppServerIds.has(session.app_server_id)),
       pendingApproval: sessionManager.getPendingApproval(session.id),
       lastEventAt: session.last_event_at,
       lastAssistantContent: session.last_assistant_content,
@@ -132,6 +134,10 @@ export function createSessionRouter(
         appServerId: session.app_server_id,
         appServerEndpoint: session.app_server_endpoint,
         appServerPid: session.app_server_pid,
+        appServerConnected: Boolean(
+          session.app_server_id &&
+            appServerRegistry.list().some((appServer) => appServer.id === session.app_server_id),
+        ),
         pendingApproval: sessionManager.getPendingApproval(session.id),
         createdAt: session.created_at,
         updatedAt: session.updated_at,
