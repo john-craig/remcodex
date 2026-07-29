@@ -62,6 +62,9 @@ export function runMigrations(db: DatabaseClient): void {
   ensureColumn(db, "sessions", "source_kind", "TEXT NOT NULL DEFAULT 'native'");
   ensureColumn(db, "sessions", "parent_session_id", "TEXT");
   ensureColumn(db, "sessions", "starting_prompt", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "sessions", "description", "TEXT");
+  ensureColumn(db, "sessions", "tags_json", "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn(db, "sessions", "metadata_json", "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn(db, "sessions", "source_rollout_path", "TEXT");
   ensureColumn(db, "sessions", "source_thread_id", "TEXT");
   ensureColumn(db, "sessions", "source_sync_cursor", "INTEGER");

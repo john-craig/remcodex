@@ -201,6 +201,9 @@ export interface SessionRecord {
   codex_thread_id: string | null;
   parent_session_id: string | null;
   starting_prompt: string;
+  description: string | null;
+  tags: string[];
+  metadata: Record<string, unknown>;
   source_kind: SessionSourceKind;
   source_rollout_path: string | null;
   source_thread_id: string | null;

@@ -28,6 +28,9 @@ export function createSessionRouter(
       status: session.status,
       liveBusy: sessionManager.isLiveBusy(session.id),
       codexThreadId: session.codex_thread_id,
+      description: session.description,
+      tags: session.tags,
+      metadata: session.metadata,
       startingPrompt: session.starting_prompt,
       sourceKind: session.source_kind,
       sourceRolloutPath: session.source_rollout_path,
@@ -68,12 +71,18 @@ export function createSessionRouter(
         title?: string;
         projectId?: string;
         startingPrompt?: string;
+        description?: string | null;
+        tags?: string[];
+        metadata?: Record<string, unknown>;
         parentSessionId?: string;
       };
       const session = sessionManager.createSession({
         title: body.title,
         projectId: body.projectId ?? "",
         startingPrompt: body.startingPrompt,
+        description: body.description,
+        tags: body.tags,
+        metadata: body.metadata,
         parentSessionId: body.parentSessionId,
       });
 
@@ -82,6 +91,9 @@ export function createSessionRouter(
         status: session.status,
         parentSessionId: session.parent_session_id,
         startingPrompt: session.starting_prompt,
+        description: session.description,
+        tags: session.tags,
+        metadata: session.metadata,
       });
     } catch (error) {
       next(error);
@@ -109,6 +121,9 @@ export function createSessionRouter(
         liveBusy: sessionManager.isLiveBusy(session.id),
         pid: session.pid,
         codexThreadId: session.codex_thread_id,
+        description: session.description,
+        tags: session.tags,
+        metadata: session.metadata,
         startingPrompt: session.starting_prompt,
         sourceKind: session.source_kind,
         sourceRolloutPath: session.source_rollout_path,
@@ -121,6 +136,31 @@ export function createSessionRouter(
         createdAt: session.created_at,
         updatedAt: session.updated_at,
         sessionUrl: `/#/sessions/${encodeURIComponent(session.id)}`,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch("/:sessionId", (request, response, next) => {
+    try {
+      const body = request.body as {
+        description?: string | null;
+        tags?: string[];
+        metadata?: Record<string, unknown>;
+      };
+      const session = sessionManager.updateSessionMetadata({
+        sessionId: request.params.sessionId,
+        description: body.description,
+        tags: body.tags,
+        metadata: body.metadata,
+      });
+      response.json({
+        sessionId: session.id,
+        description: session.description,
+        tags: session.tags,
+        metadata: session.metadata,
+        updatedAt: session.updated_at,
       });
     } catch (error) {
       next(error);

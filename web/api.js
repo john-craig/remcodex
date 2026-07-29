@@ -66,6 +66,13 @@ export function getSession(sessionId) {
   return request(`/api/sessions/${sessionId}`);
 }
 
+export function updateSessionMetadata(sessionId, payload) {
+  return request(`/api/sessions/${sessionId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function syncImportedSession(sessionId) {
   return request(`/api/sessions/${sessionId}/sync`, {
     method: "POST",

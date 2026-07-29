@@ -188,6 +188,31 @@ function normalizeDemoPrompt(projectPath: string, message: string): string {
   return `${message.trim()}\n\nUse this exact target path: ${targetPath}`;
 }
 
+function normalizeSessionTags(tags: string[] | undefined): string[] {
+  return [...new Set((tags ?? []).map((tag) => String(tag).trim()).filter(Boolean))];
+}
+
+function parseSessionJson<T>(value: unknown, fallback: T): T {
+  if (typeof value !== "string" || !value.trim()) {
+    return fallback;
+  }
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function hydrateSession<T extends object>(row: T): T {
+  const raw = row as T & { tags_json?: unknown; metadata_json?: unknown };
+  const { tags_json: tagsJson, metadata_json: metadataJson, ...session } = raw;
+  return {
+    ...session,
+    tags: parseSessionJson<string[]>(tagsJson, []),
+    metadata: parseSessionJson<Record<string, unknown>>(metadataJson, {}),
+  } as T;
+}
+
 export class SessionManager {
   private readonly runners = new Map<string, RunnerState>();
   private readonly pendingApprovals = new Map<string, Map<string, PendingApproval>>();
@@ -196,7 +221,7 @@ export class SessionManager {
   constructor(private readonly options: SessionManagerOptions) {}
 
   listSessions(): SessionListRecord[] {
-    return this.options.db
+    const rows = this.options.db
       .prepare(
         `
           SELECT
@@ -208,6 +233,9 @@ export class SessionManager {
             s.codex_thread_id,
             s.parent_session_id,
             s.starting_prompt,
+            s.description,
+            s.tags_json,
+            s.metadata_json,
             s.source_kind,
             s.source_rollout_path,
             s.source_thread_id,
@@ -251,7 +279,9 @@ export class SessionManager {
           ORDER BY COALESCE(last_event_at, s.updated_at) DESC
         `,
       )
-      .all() as SessionListRecord[];
+      .all() as Array<Record<string, unknown>>;
+    return rows
+      .map((session) => hydrateSession(session) as unknown as SessionListRecord);
   }
 
   findSessionByProjectPath(projectPath: string): SessionRecord | null {
@@ -265,8 +295,8 @@ export class SessionManager {
       return null;
     }
 
-    return (
-      (this.options.db
+    const row = (
+      this.options.db
         .prepare(
           `
             SELECT *
@@ -277,8 +307,9 @@ export class SessionManager {
             LIMIT 1
           `,
         )
-        .get(project.id) as SessionRecord | undefined) ?? null
+        .get(project.id) as Record<string, unknown> | undefined
     );
+    return row ? (hydrateSession(row) as unknown as SessionRecord) : null;
   }
 
   listSessionsByProjectPath(projectPath: string): SessionListRecord[] {
@@ -305,8 +336,8 @@ export class SessionManager {
   }
 
   getSession(sessionId: string): SessionRecord | null {
-    return (
-      (this.options.db
+    const row = (
+      this.options.db
         .prepare(
           `
             SELECT
@@ -318,6 +349,9 @@ export class SessionManager {
               codex_thread_id,
               parent_session_id,
               starting_prompt,
+              description,
+              tags_json,
+              metadata_json,
               source_kind,
               source_rollout_path,
               source_thread_id,
@@ -333,8 +367,9 @@ export class SessionManager {
             WHERE id = ?
           `,
         )
-        .get(sessionId) as SessionRecord | undefined) ?? null
+        .get(sessionId) as Record<string, unknown> | undefined
     );
+    return row ? (hydrateSession(row) as unknown as SessionRecord) : null;
   }
 
   getPendingApproval(sessionId: string): SessionApprovalPayload | null {
@@ -399,10 +434,38 @@ export class SessionManager {
     return this.getSessionOrThrow(session.id);
   }
 
+  updateSessionMetadata(input: {
+    sessionId: string;
+    description?: string | null;
+    tags?: string[];
+    metadata?: Record<string, unknown>;
+  }): SessionRecord {
+    const session = this.getSessionOrThrow(input.sessionId);
+    const description =
+      input.description === undefined ? session.description : input.description?.trim() || null;
+    const tags = input.tags === undefined ? session.tags : normalizeSessionTags(input.tags);
+    const metadata = input.metadata === undefined ? session.metadata : input.metadata;
+
+    this.options.db
+      .prepare(
+        `
+          UPDATE sessions
+          SET description = ?, tags_json = ?, metadata_json = ?, updated_at = ?
+          WHERE id = ?
+        `,
+      )
+      .run(description, JSON.stringify(tags), JSON.stringify(metadata), nowIso(), session.id);
+
+    return this.getSessionOrThrow(session.id);
+  }
+
   createSession(input: {
     projectId: string;
     title?: string;
     startingPrompt?: string;
+    description?: string | null;
+    tags?: string[];
+    metadata?: Record<string, unknown>;
     parentSessionId?: string | null;
   }): SessionRecord {
     const project = this.options.projectManager.getProject(input.projectId);
@@ -431,6 +494,9 @@ export class SessionManager {
       codex_thread_id: null,
       parent_session_id: parentSession?.id ?? null,
       starting_prompt: normalizeSessionStartingPrompt(input.startingPrompt),
+      description: input.description?.trim() || null,
+      tags: normalizeSessionTags(input.tags),
+      metadata: input.metadata ?? {},
       source_kind: "native",
       source_rollout_path: null,
       source_thread_id: null,
@@ -456,6 +522,9 @@ export class SessionManager {
             codex_thread_id,
             parent_session_id,
             starting_prompt,
+            description,
+            tags_json,
+            metadata_json,
             source_kind,
             source_rollout_path,
             source_thread_id,
@@ -468,7 +537,7 @@ export class SessionManager {
             created_at,
             updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -480,6 +549,9 @@ export class SessionManager {
         session.codex_thread_id,
         session.parent_session_id,
         session.starting_prompt,
+        session.description,
+        JSON.stringify(session.tags),
+        JSON.stringify(session.metadata),
         session.source_kind,
         session.source_rollout_path,
         session.source_thread_id,

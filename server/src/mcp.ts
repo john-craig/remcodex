@@ -85,6 +85,9 @@ function serializeSession(
     liveBusy: sessionManagerIsBusy(session.status, session.source_kind),
     pid: session.pid,
     codexThreadId: session.codex_thread_id,
+    description: session.description,
+    tags: session.tags,
+    metadata: session.metadata,
     sourceKind: session.source_kind,
     sourceRolloutPath: session.source_rollout_path,
     sourceThreadId: session.source_thread_id,
@@ -113,6 +116,9 @@ function serializeSessionListItem(
     liveBusy: sessionManagerIsBusy(session.status, session.source_kind),
     pid: session.pid,
     codexThreadId: session.codex_thread_id,
+    description: session.description,
+    tags: session.tags,
+    metadata: session.metadata,
     sourceKind: session.source_kind,
     sourceRolloutPath: session.source_rollout_path,
     sourceThreadId: session.source_thread_id,
@@ -321,13 +327,16 @@ function registerToolserver(
           projectId: z.string().min(1).optional(),
           workingDirectory: z.string().min(1).optional(),
           title: z.string().optional(),
+          description: z.string().nullable().optional(),
+          tags: z.array(z.string()).optional(),
+          metadata: z.record(z.string(), z.unknown()).optional(),
           parentSessionId: z.string().min(1).optional(),
         })
         .refine(({ projectId, workingDirectory }) => projectId || workingDirectory, {
           message: "Either projectId or workingDirectory is required.",
         }),
     },
-    async ({ projectId, workingDirectory, title, parentSessionId }) => {
+    async ({ projectId, workingDirectory, title, description, tags, metadata, parentSessionId }) => {
       try {
         const project = projectId
           ? deps.projectManager.getProject(projectId)
@@ -350,9 +359,16 @@ function registerToolserver(
           : deps.sessionManager.findSessionByProjectPath(project.path);
         const session =
           parentSessionId
-            ? deps.sessionManager.createSession({ projectId: project.id, title, parentSessionId })
+            ? deps.sessionManager.createSession({
+                projectId: project.id,
+                title,
+                description,
+                tags,
+                metadata,
+                parentSessionId,
+              })
             : reusableSession ??
-              deps.sessionManager.createSession({ projectId: project.id, title });
+              deps.sessionManager.createSession({ projectId: project.id, title, description, tags, metadata });
         return mcpJsonResult(
           {
             ...serializeSession(
@@ -365,6 +381,41 @@ function registerToolserver(
         );
       } catch (error) {
         return mcpErrorResult("Failed to create session.", error instanceof Error ? error.message : error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "update-session-metadata",
+    {
+      description: "Update the description, tags, or metadata of an existing session.",
+      inputSchema: z.object({
+        sessionId: z.string().min(1),
+        description: z.string().nullable().optional(),
+        tags: z.array(z.string()).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+      }),
+    },
+    async ({ sessionId, description, tags, metadata }) => {
+      try {
+        const session = deps.sessionManager.updateSessionMetadata({
+          sessionId,
+          description,
+          tags,
+          metadata,
+        });
+        return mcpJsonResult(
+          serializeSession(
+            session,
+            deps.projectManager,
+            deps.sessionManager.getPendingApproval(session.id),
+          ),
+        );
+      } catch (error) {
+        return mcpErrorResult(
+          "Failed to update session metadata.",
+          error instanceof Error ? error.message : error,
+        );
       }
     },
   );

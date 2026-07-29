@@ -131,3 +131,39 @@ test("allows parent sessions only along ancestor directory paths", () => {
     /Parent session directory must be an ancestor/,
   );
 });
+
+test("stores and updates session descriptions, tags, and metadata", () => {
+  const { projectManager, root, sessionManager } = makeManagers();
+  const projectPath = path.join(root, "workspace");
+  fs.mkdirSync(projectPath);
+  const project = projectManager.getOrCreateProjectByPath(projectPath);
+
+  const session = sessionManager.createSession({
+    projectId: project.id,
+    description: "Initial session context",
+    tags: [" agentic ", "remcodex", "agentic"],
+    metadata: { owner: "orchestrator", priority: 2 },
+  });
+
+  assert.equal(session.description, "Initial session context");
+  assert.deepEqual(session.tags, ["agentic", "remcodex"]);
+  assert.deepEqual(session.metadata, { owner: "orchestrator", priority: 2 });
+
+  const updated = sessionManager.updateSessionMetadata({
+    sessionId: session.id,
+    description: null,
+    tags: ["follow-up"],
+    metadata: { owner: "worker", priority: 3 },
+  });
+  assert.equal(updated.description, null);
+  assert.deepEqual(updated.tags, ["follow-up"]);
+  assert.deepEqual(updated.metadata, { owner: "worker", priority: 3 });
+
+  const descriptionOnly = sessionManager.updateSessionMetadata({
+    sessionId: session.id,
+    description: "Updated context",
+  });
+  assert.equal(descriptionOnly.description, "Updated context");
+  assert.deepEqual(descriptionOnly.tags, ["follow-up"]);
+  assert.deepEqual(descriptionOnly.metadata, { owner: "worker", priority: 3 });
+});
