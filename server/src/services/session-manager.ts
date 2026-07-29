@@ -74,6 +74,10 @@ interface PatchRuntimeState {
 
 interface RunnerState {
   runner: CodexRunner;
+  cwd: string;
+  command: string;
+  stderr: string;
+  stderrTruncated: boolean;
   stopRequested: boolean;
   transientSeqCursor: number;
   turnId: string;
@@ -647,6 +651,10 @@ export class SessionManager {
     const effectiveLaunch = this.withSessionWritableRoots(sessionId, codexLaunch);
     const runtime: RunnerState = {
       runner,
+      cwd,
+      command: this.options.codexCommand,
+      stderr: "",
+      stderrTruncated: false,
       stopRequested: false,
       transientSeqCursor: this.options.eventStore.latestSeq(sessionId),
       turnId,
@@ -681,8 +689,13 @@ export class SessionManager {
       }
     });
 
-    runner.onText((_stream, _text) => {
-      // raw stdout/stderr no longer belongs to the primary event protocol
+    runner.onText((stream, text) => {
+      if (stream === "stderr") {
+        const separator = runtime.stderr && !runtime.stderr.endsWith("\n") ? "\n" : "";
+        const capped = appendCappedText(runtime.stderr, `${separator}${text}`);
+        runtime.stderr = capped.nextText;
+        runtime.stderrTruncated ||= capped.truncated;
+      }
     });
 
     runner.onExit((exitCode) => {
@@ -1089,7 +1102,12 @@ export class SessionManager {
           runtime.turnId,
           `Process exited with code ${exitCode ?? -1}.`,
           {
+            command: runtime.command,
+            cwd: runtime.cwd,
             exitCode,
+            stderr: runtime.stderr || null,
+            stderrTruncated: runtime.stderrTruncated,
+            executionMode: this.options.codexMode,
           },
         );
         this.completeTurn(sessionId, runtime, "turn.aborted", {

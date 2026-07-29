@@ -17,6 +17,10 @@ function makeRuntime(turnId: string) {
         return true;
       },
     },
+    cwd: "/tmp/remcodex-test",
+    command: "codex",
+    stderr: "",
+    stderrTruncated: false,
     stopRequested: false,
     transientSeqCursor: 0,
     turnId,
