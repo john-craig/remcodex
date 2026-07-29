@@ -244,6 +244,15 @@ Default port: **18840**
 PORT=18841 npx remcodex
 ```
 
+If RemCodex is reached through a hostname or reverse proxy, set
+`REMCODEX_HOSTNAME` to the public hostname or full HTTP(S) origin. Session
+links returned by the API and MCP tools will use that value; when it is not
+set, they remain relative links:
+
+```bash
+REMCODEX_HOSTNAME=https://remcodex.example.com npx remcodex
+```
+
 The MCP endpoint lives at `POST /mcp`. If `REMCODEX_MCP_API_TOKEN` is set at
 startup, the server will require the matching bearer token on every MCP
 request. If it is not set, MCP stays disabled and the rest of RemCodex still

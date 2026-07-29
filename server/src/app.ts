@@ -34,6 +34,7 @@ import {
   parseRemCodexDirectoryInstances,
   type RemCodexDirectoryInstance,
 } from "./utils/remcodex-directory";
+import { resolveRemCodexPublicBaseUrl } from "./utils/remcodex-url";
 
 export interface RemCodexServerOptions {
   port?: number;
@@ -97,6 +98,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
   const directoryInstances = options.directoryInstances ?? parseRemCodexDirectoryInstances(
     process.env.REMCODEX_DIRECTORY_INSTANCES ?? "",
   );
+  const publicBaseUrl = resolveRemCodexPublicBaseUrl();
 
   mkdirSync(path.dirname(databasePath), { recursive: true });
 
@@ -140,6 +142,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
       codexMode,
       codexCommand,
       projectRoots: projectManager.listAllowedRoots(),
+      publicBaseUrl,
       now: new Date().toISOString(),
     });
   });

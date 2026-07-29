@@ -9,6 +9,7 @@ import type { CodexExecutionMode } from "./services/codex-runner";
 import { SpeechToTextService } from "./services/speech-to-text";
 import { resolveDefaultDatabasePath, resolvePackageRoot } from "./utils/runtime-paths";
 import { resolveExecutable } from "./utils/command";
+import { resolveRemCodexPublicBaseUrl } from "./utils/remcodex-url";
 
 interface CliFlags {
   port?: number;
@@ -291,6 +292,10 @@ async function runStart(flags: CliFlags): Promise<number> {
   print(`Database: ${started.databasePath}`);
   print("");
   print(`Local: ${localUrl}`);
+  const publicBaseUrl = resolveRemCodexPublicBaseUrl();
+  if (publicBaseUrl) {
+    print(`Public: ${publicBaseUrl}`);
+  }
   lanUrls.forEach((url) => {
     print(`LAN:   ${url}`);
   });

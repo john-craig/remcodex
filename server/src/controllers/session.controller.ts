@@ -7,6 +7,7 @@ import { SessionManager } from "../services/session-manager";
 import { SessionTimelineService } from "../services/session-timeline-service";
 import { CodexAppServerRegistryService } from "../services/codex-app-server-registry";
 import { normalizeCodexExecLaunchInput } from "../utils/codex-launch";
+import { buildRemCodexSessionUrl } from "../utils/remcodex-url";
 
 export function createSessionRouter(
   sessionManager: SessionManager,
@@ -141,7 +142,7 @@ export function createSessionRouter(
         pendingApproval: sessionManager.getPendingApproval(session.id),
         createdAt: session.created_at,
         updatedAt: session.updated_at,
-        sessionUrl: `/#/sessions/${encodeURIComponent(session.id)}`,
+        sessionUrl: buildRemCodexSessionUrl(session.id),
       });
     } catch (error) {
       next(error);

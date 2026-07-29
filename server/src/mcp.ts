@@ -12,6 +12,7 @@ import { SessionManager } from "./services/session-manager";
 import { SessionTimelineService } from "./services/session-timeline-service";
 import { CodexRolloutSyncService } from "./services/codex-rollout-sync";
 import { normalizeCodexExecLaunchInput } from "./utils/codex-launch";
+import { buildRemCodexSessionUrl } from "./utils/remcodex-url";
 
 interface McpSessionEntry {
   transport: NodeStreamableHTTPServerTransport;
@@ -95,7 +96,7 @@ function serializeSession(
     pendingApproval,
     createdAt: session.created_at,
     updatedAt: session.updated_at,
-    sessionUrl: `/#/sessions/${encodeURIComponent(session.id)}`,
+    sessionUrl: buildRemCodexSessionUrl(session.id),
   };
 }
 
@@ -130,7 +131,7 @@ function serializeSessionListItem(
     eventCount: session.event_count,
     createdAt: session.created_at,
     updatedAt: session.updated_at,
-    sessionUrl: `/#/sessions/${encodeURIComponent(session.id)}`,
+    sessionUrl: buildRemCodexSessionUrl(session.id),
   };
 }
 
