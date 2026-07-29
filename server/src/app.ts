@@ -30,6 +30,10 @@ import {
 } from "./utils/runtime-paths";
 import { resolveExecutable } from "./utils/command";
 import { isAppError } from "./utils/errors";
+import {
+  parseRemCodexDirectoryInstances,
+  type RemCodexDirectoryInstance,
+} from "./utils/remcodex-directory";
 
 export interface RemCodexServerOptions {
   port?: number;
@@ -40,6 +44,7 @@ export interface RemCodexServerOptions {
   codexCommand?: string;
   codexMode?: CodexExecutionMode;
   logStartup?: boolean;
+  directoryInstances?: RemCodexDirectoryInstance[];
 }
 
 function resolveMcpApiToken(): string | null {
@@ -56,6 +61,7 @@ export interface StartedRemCodexServer {
   codexCommand: string;
   codexMode: CodexExecutionMode;
   projectRoots: string[];
+  directoryInstances: RemCodexDirectoryInstance[];
   stop: () => Promise<void>;
 }
 
@@ -70,6 +76,7 @@ interface BuiltRemCodexServer {
   codexMode: CodexExecutionMode;
   projectRoots: string[];
   logStartup: boolean;
+  directoryInstances: RemCodexDirectoryInstance[];
 }
 
 function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodexServer {
@@ -87,6 +94,9 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
   const codexMode: CodexExecutionMode =
     options.codexMode ?? (process.env.CODEX_MODE === "exec-json" ? "exec-json" : "app-server");
   const projectRootsEnv = options.projectRootsEnv ?? process.env.PROJECT_ROOTS;
+  const directoryInstances = options.directoryInstances ?? parseRemCodexDirectoryInstances(
+    process.env.REMCODEX_DIRECTORY_INSTANCES ?? "",
+  );
 
   mkdirSync(path.dirname(databasePath), { recursive: true });
 
@@ -119,6 +129,10 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
   const server = http.createServer(app);
 
   app.use(express.json({ limit: "1mb" }));
+
+  app.get("/api/directory/instances", (_request, response) => {
+    response.json({ items: directoryInstances });
+  });
 
   app.get("/health", (_request, response) => {
     response.json({
@@ -186,6 +200,9 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
 
   const webRoot = path.join(repoRoot, "web");
   app.use(express.static(webRoot));
+  app.get(["/directory", "/directory/"], (_request, response) => {
+    response.sendFile(path.join(webRoot, "directory.html"));
+  });
   app.get("/", (_request, response) => {
     response.sendFile(path.join(webRoot, "index.html"));
   });
@@ -222,6 +239,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
     codexCommand,
     codexMode,
     projectRoots: projectManager.listAllowedRoots(),
+    directoryInstances,
     logStartup: options.logStartup ?? true,
   };
 }
@@ -255,6 +273,7 @@ export async function startRemCodexServer(
         codexMode: built.codexMode,
         databasePath: built.databasePath,
         codexCommand: built.codexCommand,
+        directoryInstances: built.directoryInstances.length,
       }),
     );
   }
@@ -268,6 +287,7 @@ export async function startRemCodexServer(
     codexCommand: built.codexCommand,
     codexMode: built.codexMode,
     projectRoots: built.projectRoots,
+    directoryInstances: built.directoryInstances,
     stop: () =>
       new Promise<void>((resolve, reject) => {
         built.server.close((error) => {

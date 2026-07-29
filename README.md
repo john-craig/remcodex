@@ -97,6 +97,22 @@ http://<your-ip>:18840
 
 > Runs entirely on your local machine. No cloud, no data upload.
 
+### RemCodex directory
+
+RemCodex can also serve a directory page that links to multiple RemCodex
+instances. Configure the instances as a JSON array at startup:
+
+```bash
+export REMCODEX_DIRECTORY_INSTANCES='[
+  {"name":"Home","url":"https://remcodex.example","description":"Primary workspace"},
+  {"name":"Lab","url":"https://lab-remcodex.example"}
+]'
+npx remcodex
+```
+
+Then open `/directory` on the RemCodex host. Each configured instance is
+validated and displayed as an openable card.
+
 Nix users can run the packaged server directly:
 
 ```bash
