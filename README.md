@@ -258,6 +258,17 @@ Authorization = "Bearer $(cat /path/to/remcodex-token)"
 If you do not set `REMCODEX_MCP_API_TOKEN` when starting RemCodex, leave the
 `http_headers` table out.
 
+### Interactive TUI wrapper
+
+`remcodex-tui` is a Python wrapper around the Codex CLI. With no arguments it
+starts a local Unix-socket Codex app-server, registers it for RemCodex
+discovery, and launches the interactive TUI through `codex --remote`. Explicit
+Codex arguments pass through unchanged, so commands such as
+`remcodex-tui exec --help` retain normal Codex behavior.
+
+The wrapper honors `CODEX_COMMAND`, `XDG_RUNTIME_DIR`, and
+`CODEX_APP_SERVER_REGISTRY_DIR`.
+
 The MCP `create-session` tool accepts either a `projectId` or a
 `workingDirectory`. Directory requests resolve an existing project and reuse
 the latest non-terminal session for that directory; if the directory is not
