@@ -260,10 +260,7 @@ export class SessionManager {
       return null;
     }
 
-    const normalizedPath = path.resolve(trimmedPath);
-    const project = this.options.projectManager
-      .listProjects()
-      .find((candidate) => path.resolve(candidate.path) === normalizedPath);
+    const project = this.options.projectManager.getProjectByPath(trimmedPath);
     if (!project) {
       return null;
     }
@@ -282,6 +279,15 @@ export class SessionManager {
         )
         .get(project.id) as SessionRecord | undefined) ?? null
     );
+  }
+
+  listSessionsByProjectPath(projectPath: string): SessionListRecord[] {
+    const project = this.options.projectManager.getProjectByPath(projectPath);
+    if (!project) {
+      return [];
+    }
+
+    return this.listSessions().filter((session) => session.project_id === project.id);
   }
 
   isLiveBusy(sessionId: string): boolean {
@@ -362,6 +368,37 @@ export class SessionManager {
     };
   }
 
+  resumeSession(sessionId: string, parentSessionId?: string | null): SessionRecord {
+    const session = this.getSessionOrThrow(sessionId);
+    const requestedParentId = String(parentSessionId || "").trim();
+    if (requestedParentId) {
+      if (requestedParentId === session.id) {
+        throw new AppError(400, "A session cannot be its own parent.");
+      }
+
+      const parent = this.getSession(requestedParentId);
+      if (!parent) {
+        throw new AppError(404, "Parent session not found.");
+      }
+      if (!this.options.projectManager.isProjectPathAncestor(parent.project_id, session.project_id)) {
+        throw new AppError(400, "Parent session directory must be an ancestor of the resumed session directory.");
+      }
+    }
+
+    const nextStatus = ["completed", "failed"].includes(session.status) ? "idle" : session.status;
+    this.options.db
+      .prepare(
+        `
+          UPDATE sessions
+          SET parent_session_id = ?, status = ?, updated_at = ?
+          WHERE id = ?
+        `,
+      )
+      .run(requestedParentId || session.parent_session_id, nextStatus, nowIso(), session.id);
+
+    return this.getSessionOrThrow(session.id);
+  }
+
   createSession(input: {
     projectId: string;
     title?: string;
@@ -377,8 +414,11 @@ export class SessionManager {
     if (parentSessionId && !parentSession) {
       throw new AppError(404, "Parent session not found.");
     }
-    if (parentSession && parentSession.project_id !== project.id) {
-      throw new AppError(400, "Parent session must belong to the same project.");
+    if (
+      parentSession &&
+      !this.options.projectManager.isProjectPathAncestor(parentSession.project_id, project.id)
+    ) {
+      throw new AppError(400, "Parent session directory must be an ancestor of the child session directory.");
     }
 
     const timestamp = nowIso();

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
@@ -246,6 +247,26 @@ function registerToolserver(
   );
 
   server.registerTool(
+    "list-sessions-by-directory",
+    {
+      description: "List all sessions previously started in a working directory.",
+      inputSchema: z.object({
+        workingDirectory: z.string().min(1),
+      }),
+    },
+    async ({ workingDirectory }) =>
+      mcpJsonResult(
+        deps.sessionManager.listSessionsByProjectPath(workingDirectory).map((session) =>
+          serializeSessionListItem(
+            session,
+            deps.projectManager,
+            deps.sessionManager.getPendingApproval(session.id),
+          ),
+        ),
+      ),
+  );
+
+  server.registerTool(
     "get-session",
     {
       description: "Get a single session by id.",
@@ -266,25 +287,81 @@ function registerToolserver(
   );
 
   server.registerTool(
-    "create-session",
+    "resume-session",
     {
-      description: "Create a new session for a project.",
+      description: "Resume an existing session for continued work.",
       inputSchema: z.object({
-        projectId: z.string().min(1),
-        title: z.string().optional(),
+        sessionId: z.string().min(1),
         parentSessionId: z.string().min(1).optional(),
       }),
     },
-    async ({ projectId, title, parentSessionId }) => {
+    async ({ sessionId, parentSessionId }) => {
       try {
-        const project = deps.projectManager.getProject(projectId);
+        const session = deps.sessionManager.resumeSession(sessionId, parentSessionId);
+        return mcpJsonResult({
+          ...serializeSession(
+            session,
+            deps.projectManager,
+            deps.sessionManager.getPendingApproval(session.id),
+          ),
+          resumed: true,
+        });
+      } catch (error) {
+        return mcpErrorResult("Failed to resume session.", error instanceof Error ? error.message : error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "create-session",
+    {
+      description: "Find or create a session for a project or working directory.",
+      inputSchema: z
+        .object({
+          projectId: z.string().min(1).optional(),
+          workingDirectory: z.string().min(1).optional(),
+          title: z.string().optional(),
+          parentSessionId: z.string().min(1).optional(),
+        })
+        .refine(({ projectId, workingDirectory }) => projectId || workingDirectory, {
+          message: "Either projectId or workingDirectory is required.",
+        }),
+    },
+    async ({ projectId, workingDirectory, title, parentSessionId }) => {
+      try {
+        const project = projectId
+          ? deps.projectManager.getProject(projectId)
+          : deps.projectManager.getOrCreateProjectByPath(
+              workingDirectory ?? "",
+              path.basename(path.resolve(workingDirectory ?? "")),
+            );
+        if (!project) {
+          return mcpErrorResult("Project not found.");
+        }
+        if (
+          workingDirectory &&
+          path.resolve(project.path) !== path.resolve(workingDirectory)
+        ) {
+          return mcpErrorResult("Project and working directory do not refer to the same path.");
+        }
+
+        const reusableSession = parentSessionId
+          ? null
+          : deps.sessionManager.findSessionByProjectPath(project.path);
         const session =
           parentSessionId
-            ? deps.sessionManager.createSession({ projectId, title, parentSessionId })
-            : deps.sessionManager.findSessionByProjectPath(project?.path ?? "") ??
-              deps.sessionManager.createSession({ projectId, title });
+            ? deps.sessionManager.createSession({ projectId: project.id, title, parentSessionId })
+            : reusableSession ??
+              deps.sessionManager.createSession({ projectId: project.id, title });
         return mcpJsonResult(
-          serializeSession(session, deps.projectManager, deps.sessionManager.getPendingApproval(session.id)),
+          {
+            ...serializeSession(
+              session,
+              deps.projectManager,
+              deps.sessionManager.getPendingApproval(session.id),
+            ),
+            reused: reusableSession?.id === session.id,
+          },
         );
       } catch (error) {
         return mcpErrorResult("Failed to create session.", error instanceof Error ? error.message : error);

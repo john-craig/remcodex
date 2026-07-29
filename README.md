@@ -258,6 +258,22 @@ Authorization = "Bearer $(cat /path/to/remcodex-token)"
 If you do not set `REMCODEX_MCP_API_TOKEN` when starting RemCodex, leave the
 `http_headers` table out.
 
+The MCP `create-session` tool accepts either a `projectId` or a
+`workingDirectory`. Directory requests resolve an existing project and reuse
+the latest non-terminal session for that directory; if the directory is not
+registered yet, RemCodex registers it as a project before creating the session.
+Providing `parentSessionId` always creates a new child session instead of
+reusing an existing one.
+
+The read-only `list-sessions-by-directory` tool returns all sessions recorded
+for a working directory, including completed and failed sessions.
+
+The `resume-session` tool selects an existing session for continued work. It
+can optionally associate the resumed session with a parent session and changes
+terminal session status back to `idle` so the next message can continue it.
+Parenting follows the directory tree: a parent session's project directory
+must contain the child session's project directory.
+
 RemCodex can seed agent profiles from a static TOML config at startup. By
 default it reads `~/.remcodex/config.toml`, and you can override that with
 `REMCODEX_CONFIG_PATH`.
