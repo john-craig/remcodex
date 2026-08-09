@@ -74,6 +74,7 @@ RemCodex fixes that.
 - Resume after refresh, sleep, or reconnect
 - Voice-note prompt capture with local transcription
 - Browser-based UI — **no extra client required**
+- Optional Android mobile shell in [`mobile/`](mobile/)
 - Works with Codex CLI
 
 > No extra client install. Just open a browser.  
