@@ -54,12 +54,16 @@ export class CodexAppServerRunner implements CodexRunner {
   constructor(
     private readonly command: string,
     private readonly cwd: string,
+    private readonly codexHome?: string | null,
   ) {}
 
   start(prompt: string, threadId?: string | null, launch?: CodexExecLaunchInput): number {
     this.process = spawn(this.command, ["app-server", "--listen", "stdio://"], {
       cwd: this.cwd,
-      env: process.env,
+      env: {
+        ...process.env,
+        ...(this.codexHome ? { CODEX_HOME: this.codexHome } : {}),
+      },
       stdio: "pipe",
     });
 

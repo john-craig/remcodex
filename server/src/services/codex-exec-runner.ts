@@ -35,6 +35,7 @@ export class CodexExecRunner implements CodexRunner {
   constructor(
     private readonly command: string,
     private readonly cwd: string,
+    private readonly codexHome?: string | null,
   ) {}
 
   start(prompt: string, threadId?: string | null, launch?: CodexExecLaunchInput): number {
@@ -42,7 +43,10 @@ export class CodexExecRunner implements CodexRunner {
 
     this.process = spawn(this.command, args, {
       cwd: this.cwd,
-      env: process.env,
+      env: {
+        ...process.env,
+        ...(this.codexHome ? { CODEX_HOME: this.codexHome } : {}),
+      },
       stdio: "pipe",
     });
 

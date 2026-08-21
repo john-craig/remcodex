@@ -20,13 +20,14 @@ export function createCodexRunner(
   command: string,
   cwd: string,
   appServerEndpoint?: string | null,
+  codexHome?: string | null,
 ): CodexRunner {
   if (mode === "app-server") {
     if (appServerEndpoint) {
       return new CodexRemoteAppServerRunner(appServerEndpoint, cwd);
     }
-    return new CodexAppServerRunner(command, cwd);
+    return new CodexAppServerRunner(command, cwd, codexHome);
   }
 
-  return new CodexExecRunner(command, cwd);
+  return new CodexExecRunner(command, cwd, codexHome);
 }

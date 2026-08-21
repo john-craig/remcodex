@@ -176,6 +176,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
       eventStore,
       codexMode,
       codexRolloutSync,
+      agentEnvironmentRegistry,
     }),
   );
   app.use(

@@ -790,6 +790,9 @@ export class SessionManager {
       this.options.codexCommand,
       cwd,
       session.app_server_endpoint,
+      session.agent_environment
+        ? resolveAgentEnvironment(this.options.agentEnvironmentRegistry ?? EMPTY_AGENT_ENVIRONMENT_REGISTRY, session.agent_environment)?.codexHome
+        : null,
     );
     const effectiveLaunch = this.withSessionWritableRoots(sessionId, codexLaunch);
     const runtime: RunnerState = {

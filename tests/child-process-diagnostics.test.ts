@@ -9,8 +9,13 @@ import { runMigrations } from "../server/src/db/migrations";
 import { EventStore } from "../server/src/services/event-store";
 import { ProjectManager } from "../server/src/services/project-manager";
 import { SessionManager } from "../server/src/services/session-manager";
+import type { AgentEnvironmentRegistry } from "../server/src/utils/agent-environment-registry";
 
-function makeProject(codexCommand: string, codexMode: "exec-json" | "app-server") {
+function makeProject(
+  codexCommand: string,
+  codexMode: "exec-json" | "app-server",
+  agentEnvironmentRegistry?: AgentEnvironmentRegistry,
+) {
   const db = createDatabase(":memory:");
   runMigrations(db);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "remcodex-diagnostics-"));
@@ -24,6 +29,7 @@ function makeProject(codexCommand: string, codexMode: "exec-json" | "app-server"
     projectManager,
     codexCommand,
     codexMode,
+    agentEnvironmentRegistry,
   });
   const project = projectManager.createProject({ name: "Diagnostics", path: projectPath });
   const session = manager.createSession({ projectId: project.id });
@@ -68,10 +74,11 @@ test("persists stderr, command, cwd, and exit status for failed exec processes",
 
 test("persists stderr from app-server bootstrap failures", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "remcodex-app-server-"));
+  const codexHome = path.join(root, "reviewer");
   const command = writeLauncher(
     root,
     `const readline = require("node:readline");
-process.stderr.write("bootstrap diagnostic\\n");
+process.stderr.write("bootstrap diagnostic CODEX_HOME=" + (process.env.CODEX_HOME || "") + "\\n");
 const rl = readline.createInterface({ input: process.stdin });
 rl.on("line", (line) => {
   const request = JSON.parse(line);
@@ -83,14 +90,47 @@ rl.on("line", (line) => {
 });
 `,
   );
-  const { eventStore, manager, session } = makeProject(command, "app-server");
+  const { eventStore, manager, session } = makeProject(command, "app-server", {
+    version: 1,
+    defaultEnvironment: "reviewer",
+    managedPaths: [root],
+    allowedRoots: [root],
+    environments: {
+      reviewer: { name: "reviewer", codexHome, managedPath: root, allowedRoots: [root] },
+    },
+  });
 
   manager.sendMessage(session.id, "trigger bootstrap failure");
   await waitForFailed(manager, session.id);
 
   const error = eventStore.listAll(session.id).find((event) => event.type === "error");
   assert.ok(error);
-  assert.match(String(error.payload.details?.stderr), /bootstrap diagnostic/);
+  assert.match(String(error.payload.details?.stderr), new RegExp(`bootstrap diagnostic CODEX_HOME=${codexHome.replace(/[.*+?^${}()|[\\]\\]/g, "\\\\$&")}`));
   assert.equal(error.payload.details?.exitCode, 1);
   assert.equal(error.payload.details?.executionMode, "app-server");
+});
+
+test("launches local exec children with the session agent environment home", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "remcodex-agent-home-"));
+  const codexHome = path.join(root, "writer");
+  const command = writeLauncher(
+    root,
+    "process.stderr.write(`CODEX_HOME=${process.env.CODEX_HOME || ''}\\n`); process.exit(7);\n",
+  );
+  const registry: AgentEnvironmentRegistry = {
+    version: 1,
+    defaultEnvironment: "writer",
+    managedPaths: [root],
+    allowedRoots: [root],
+    environments: {
+      writer: { name: "writer", codexHome, managedPath: root, allowedRoots: [root] },
+    },
+  };
+  const { eventStore, manager, session } = makeProject(command, "exec-json", registry);
+  manager.sendMessage(session.id, "use the selected environment");
+  await waitForFailed(manager, session.id);
+
+  const error = eventStore.listAll(session.id).find((event) => event.type === "error");
+  assert.ok(error);
+  assert.match(String(error.payload.details?.stderr), new RegExp(`CODEX_HOME=${codexHome.replace(/[.*+?^${}()|[\\]\\]/g, "\\\\$&")}`));
 });
