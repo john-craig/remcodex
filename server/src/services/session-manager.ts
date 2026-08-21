@@ -501,7 +501,10 @@ export class SessionManager {
     }
 
     const requestedAgentEnvironment =
-      input.agentEnvironment?.trim() || parentSession?.agent_environment || null;
+      input.agentEnvironment?.trim() ||
+      parentSession?.agent_environment ||
+      this.options.agentEnvironmentRegistry?.defaultEnvironment ||
+      null;
     let agentEnvironment: string | null = null;
     try {
       agentEnvironment = resolveAgentEnvironment(

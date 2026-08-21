@@ -105,6 +105,7 @@ test("persists an immutable named selection and inherits it for child sessions",
   });
   const project = projectManager.createProject({ name: "Environment Project", path: projectPath });
 
+  const defaultSession = sessionManager.createSession({ projectId: project.id });
   const parent = sessionManager.createSession({
     projectId: project.id,
     agentEnvironment: "writer",
@@ -114,6 +115,7 @@ test("persists an immutable named selection and inherits it for child sessions",
     parentSessionId: parent.id,
   });
 
+  assert.equal(defaultSession.agent_environment, "writer");
   assert.equal(parent.agent_environment, "writer");
   assert.equal(child.agent_environment, "writer");
   registry.defaultEnvironment = null;
