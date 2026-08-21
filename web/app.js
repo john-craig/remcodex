@@ -249,6 +249,7 @@ function renderAppChrome({
   const nav = `<nav class="app-top-nav" aria-label="${escapeHtml(t("nav.sessions"))}">
     <a href="#/projects" class="app-nav-link">${escapeHtml(t("nav.projects"))}</a>
     <a href="#/sessions" class="app-nav-link">${escapeHtml(t("nav.sessions"))}</a>
+    <a href="#/sessions?status=running" class="app-nav-link">${escapeHtml(t("sessions.runningView"))}</a>
   </nav>`;
 
   if (variant === "marketing") {
@@ -1816,7 +1817,7 @@ function renderRoute() {
   state.route = hash;
 
   const matched = route.path.match(/^#\/sessions\/([^/]+)$/);
-  hydrateSessionsViewState("");
+  hydrateSessionsViewState(matched ? "" : route.query);
   if (matched) {
     hydrateSessionDetailViewState(route.query);
   } else {
@@ -3769,6 +3770,7 @@ function renderSessionsList() {
                             <span class="pill ${statusClass(displayStatus)}">${escapeHtml(sessionStatusLabel(displayStatus))}</span>
                           </div>
                           <p class="record-meta">${escapeHtml(t("sessions.projectMeta", { value: project?.name || session.projectId }))}</p>
+                          <p class="record-meta">${escapeHtml(project?.path || t("sessions.workingDirectoryMissing"))}</p>
                           <p class="record-meta">${escapeHtml(t("sessions.lastEventMeta", { value: session.lastEventAt || t("generic.none") }))}</p>
                           <div class="summary-strip">
                             <span class="summary-chip">${escapeHtml(t("sessions.eventCount", { count: session.eventCount ?? 0 }))}</span>
@@ -3801,6 +3803,11 @@ function renderSessionsList() {
                               : ""
                           }
                         </button>
+                        ${
+                          session.sessionUrl
+                            ? `<a class="session-open-link" href="${escapeHtml(session.sessionUrl)}">${escapeHtml(t("sessions.openSession"))}</a>`
+                            : ""
+                        }
                       </div>
                     `;
                   })

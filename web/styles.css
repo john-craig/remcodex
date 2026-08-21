@@ -1505,6 +1505,14 @@ button:hover {
   cursor: pointer;
 }
 
+.session-open-link {
+  display: inline-block;
+  margin: 0.15rem 0.95rem 0.75rem;
+  color: var(--accent-strong);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
 .session-toolbar {
   display: grid;
   gap: 0.95rem;
