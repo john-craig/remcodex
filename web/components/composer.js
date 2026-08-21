@@ -225,7 +225,7 @@ export function renderComposerStartingPromptBanner(detailState) {
   return `
     <div class="composer-starting-prompt-banner" aria-live="polite">
       <span class="composer-starting-prompt-banner-label">${escapeHtml(t("composer.startingPromptBanner"))}</span>
-      <span class="composer-starting-prompt-banner-text">${escapeHtml(startingPrompt)}</span>
+      <span class="composer-starting-prompt-banner-text" title="${escapeHtml(startingPrompt)}">${escapeHtml(startingPrompt)}</span>
     </div>
   `;
 }

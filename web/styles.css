@@ -2284,6 +2284,11 @@ button:hover {
 }
 
 .composer-starting-prompt-banner-text {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-style: inherit;
 }
 
