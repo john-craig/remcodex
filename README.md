@@ -323,6 +323,27 @@ only its internal allowlisted `mcp_servers.<server>[.tools.<tool>].enabled`
 Codex configuration keys. Raw Codex configuration objects are not accepted.
 When no policy is supplied, the existing Codex configuration is unchanged.
 
+### Named remote MCP targets
+
+MCP tool calls may target a named configured RemCodex instance by adding
+`instanceName` to the tool arguments. Configure targets with
+`REMCODEX_REMOTE_INSTANCES`; the `credentialRef` is an environment-variable
+name resolved only by the RemCodex server and is never accepted from the
+caller:
+
+```bash
+export REMCODEX_REMOTE_INSTANCES='[
+  {"name":"home","url":"https://remcodex.example","credentialRef":"REMCODEX_HOME_TOKEN"}
+]'
+export REMCODEX_HOME_TOKEN='server-side-token'
+```
+
+Targets must use HTTPS, cannot contain URL credentials, and reject loopback or
+private hosts. Unknown targets, missing credentials, and malformed
+configurations fail closed. A routed request uses only the selected target's
+credential; the caller's bearer token is not forwarded. Omitting `instanceName`
+preserves the local/default MCP behavior.
+
 The read-only `list-sessions-by-directory` tool returns all sessions recorded
 for a working directory, including completed and failed sessions.
 

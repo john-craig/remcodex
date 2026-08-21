@@ -13,6 +13,8 @@ import { SessionTimelineService } from "./services/session-timeline-service";
 import { CodexRolloutSyncService } from "./services/codex-rollout-sync";
 import { normalizeCodexExecLaunchInput } from "./utils/codex-launch";
 import { buildRemCodexSessionUrl } from "./utils/remcodex-url";
+import type { RemCodexRemoteInstance } from "./utils/remcodex-remote-instances";
+import { proxyRemoteMcpCall } from "./services/remote-mcp-client";
 
 interface McpSessionEntry {
   transport: NodeStreamableHTTPServerTransport;
@@ -29,6 +31,7 @@ export interface RemCodexMcpDependencies {
 
 export interface RemCodexMcpRequestOptions {
   apiToken: string;
+  remoteInstances?: RemCodexRemoteInstance[];
 }
 
 interface JsonRpcErrorBody {
@@ -618,6 +621,17 @@ export async function handleRemCodexMcpRequest(
   options: RemCodexMcpRequestOptions,
 ): Promise<void> {
   if (!authorizeMcpRequest(request, response, options.apiToken)) {
+    return;
+  }
+
+  const body = request.body as { method?: unknown; params?: { arguments?: Record<string, unknown> } };
+  if (body?.method === "tools/call" && typeof body.params?.arguments?.instanceName === "string") {
+    try {
+      await proxyRemoteMcpCall(body, options.remoteInstances ?? [], response);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Remote MCP request failed.";
+      response.status(/Unknown remote instance|credential is unavailable|must not target|must use https/i.test(message) ? 400 : 502).json({ error: message });
+    }
     return;
   }
 

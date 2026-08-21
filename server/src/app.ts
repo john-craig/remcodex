@@ -34,6 +34,10 @@ import {
   parseRemCodexDirectoryInstances,
   type RemCodexDirectoryInstance,
 } from "./utils/remcodex-directory";
+import {
+  parseRemCodexRemoteInstances,
+  type RemCodexRemoteInstance,
+} from "./utils/remcodex-remote-instances";
 import { resolveRemCodexPublicBaseUrl } from "./utils/remcodex-url";
 import {
   defaultAgentEnvironmentRegistryPath,
@@ -50,6 +54,7 @@ export interface RemCodexServerOptions {
   codexMode?: CodexExecutionMode;
   logStartup?: boolean;
   directoryInstances?: RemCodexDirectoryInstance[];
+  remoteInstances?: RemCodexRemoteInstance[];
 }
 
 function resolveMcpApiToken(): string | null {
@@ -67,6 +72,7 @@ export interface StartedRemCodexServer {
   codexMode: CodexExecutionMode;
   projectRoots: string[];
   directoryInstances: RemCodexDirectoryInstance[];
+  remoteInstances: RemCodexRemoteInstance[];
   stop: () => Promise<void>;
 }
 
@@ -82,6 +88,7 @@ interface BuiltRemCodexServer {
   projectRoots: string[];
   logStartup: boolean;
   directoryInstances: RemCodexDirectoryInstance[];
+  remoteInstances: RemCodexRemoteInstance[];
 }
 
 function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodexServer {
@@ -101,6 +108,9 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
   const projectRootsEnv = options.projectRootsEnv ?? process.env.PROJECT_ROOTS;
   const directoryInstances = options.directoryInstances ?? parseRemCodexDirectoryInstances(
     process.env.REMCODEX_DIRECTORY_INSTANCES ?? "",
+  );
+  const remoteInstances = options.remoteInstances ?? parseRemCodexRemoteInstances(
+    process.env.REMCODEX_REMOTE_INSTANCES ?? "",
   );
   const publicBaseUrl = resolveRemCodexPublicBaseUrl();
 
@@ -208,6 +218,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
           },
           {
             apiToken: mcpApiToken,
+            remoteInstances,
           },
         );
       } catch (error) {
@@ -264,6 +275,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
     codexMode,
     projectRoots: projectManager.listAllowedRoots(),
     directoryInstances,
+    remoteInstances,
     logStartup: options.logStartup ?? true,
   };
 }
@@ -298,6 +310,7 @@ export async function startRemCodexServer(
         databasePath: built.databasePath,
         codexCommand: built.codexCommand,
         directoryInstances: built.directoryInstances.length,
+        remoteInstances: built.remoteInstances.map((instance) => instance.name),
       }),
     );
   }
@@ -312,6 +325,7 @@ export async function startRemCodexServer(
     codexMode: built.codexMode,
     projectRoots: built.projectRoots,
     directoryInstances: built.directoryInstances,
+    remoteInstances: built.remoteInstances.map(({ name, url }) => ({ name, url, credentialRef: "[server-side]" })),
     stop: () =>
       new Promise<void>((resolve, reject) => {
         built.server.close((error) => {
