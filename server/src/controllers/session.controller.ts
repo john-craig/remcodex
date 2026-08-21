@@ -22,9 +22,10 @@ export function createSessionRouter(
   router.get("/", async (_request, response) => {
     const appServers = await appServerRegistry.sync();
     const liveAppServerIds = new Set(appServers.map((appServer) => appServer.id));
-    const items = sessionManager.listSessions().map((session) => ({
-      sessionId: session.id,
-      title: session.title,
+      const items = sessionManager.listSessions().map((session) => ({
+        sessionId: session.id,
+        sessionUrl: buildRemCodexSessionUrl(session.id),
+        title: session.title,
       projectId: session.project_id,
       parentSessionId: session.parent_session_id,
       status: session.status,
@@ -91,6 +92,7 @@ export function createSessionRouter(
 
       response.status(201).json({
         sessionId: session.id,
+        sessionUrl: buildRemCodexSessionUrl(session.id),
         status: session.status,
         parentSessionId: session.parent_session_id,
         startingPrompt: session.starting_prompt,
