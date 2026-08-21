@@ -4,6 +4,7 @@ import test from "node:test";
 import { createDatabase } from "../server/src/db/client";
 import { runMigrations } from "../server/src/db/migrations";
 import { PEER_LIMITS, PEER_SCOPES, PeerCommunicationService } from "../server/src/services/peer-communication";
+import { buildCoordinationDigest, PEER_DIGEST_LIMITS } from "../server/src/services/peer-digests";
 
 function setup(): PeerCommunicationService {
   const db = createDatabase(":memory:");
@@ -56,4 +57,28 @@ test("peer summaries and lifecycle dormancy are audited", () => {
   assert.deepEqual(peer.readSummary(target.token, grant.grantId), { milestone: "done", blockers: [] });
   peer.dormantSession("source-session", "completed");
   assert.throws(() => peer.publishSummary(source.token, grant.grantId, {}), /inactive or expired/);
+});
+
+test("terminal dormancy requires administrator reauthorization and a new grant", () => {
+  const peer = setup();
+  const admin = peer.authenticate(peer.issueCredential({ workerId: "admin", sessionId: "admin-session", scopes: [PEER_SCOPES.adminGrant] }).token);
+  const source = peer.issueCredential({ workerId: "source", sessionId: "source-session", scopes: [PEER_SCOPES.workerMailbox] });
+  const target = peer.issueCredential({ workerId: "target", sessionId: "target-session", scopes: [PEER_SCOPES.workerMailbox] });
+  const grant = peer.grant(admin, { sourceWorkerId: "source", targetWorkerId: "target", workPackageId: "wp-1", scope: PEER_SCOPES.workerMailbox });
+  peer.dormantSession("source-session", "completed");
+  assert.throws(() => peer.appendMessage(source.token, { recipientWorkerId: "target", workPackageId: "wp-1", messageType: "note", timestamp: new Date().toISOString(), idempotencyKey: "terminal-1", payload: {} }), /inactive or expired/);
+  const replacement = peer.reauthorize(admin, { workerId: "source", sessionId: "new-session", scopes: [PEER_SCOPES.workerMailbox] });
+  assert.throws(() => peer.appendMessage(replacement.token, { recipientWorkerId: "target", workPackageId: "wp-1", messageType: "note", timestamp: new Date().toISOString(), idempotencyKey: "terminal-2", payload: {} }), /not authorized/);
+  assert.equal(grant.grantId.startsWith("grant_"), true);
+  assert.equal(target.token.startsWith("peer_"), true);
+});
+
+test("coordination digests are Orchestrator-directed, non-triggering, and bounded", () => {
+  const digest = buildCoordinationDigest([
+    { kind: "milestone", workPackageId: "wp-1", summary: "completed", occurredAt: new Date().toISOString() },
+    { kind: "blocker", workPackageId: "wp-2", summary: "x".repeat(2000), occurredAt: new Date().toISOString() },
+  ]);
+  assert.equal(digest.recipient, "orchestrator");
+  assert.equal(Buffer.byteLength(JSON.stringify(digest), "utf8") <= PEER_DIGEST_LIMITS.maxBytes, true);
+  assert.equal(JSON.stringify(digest).includes("tool"), false);
 });

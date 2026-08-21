@@ -194,7 +194,21 @@ export class PeerCommunicationService {
 
   dormantSession(sessionId: string, reason: string): void {
     const result = this.db.prepare(`UPDATE peer_credentials SET status = 'dormant', dormant_at = ? WHERE session_id = ? AND status = 'active'`).run(now(), sessionId) as { changes: number };
-    if (result.changes) this.audit("credential.dormant", null, sessionId, { reason });
+    if (result.changes) {
+      const workers = this.db.prepare(`SELECT DISTINCT worker_id FROM peer_credentials WHERE session_id = ?`).all(sessionId) as Array<{ worker_id: string }>;
+      for (const worker of workers) {
+        this.db.prepare(`UPDATE peer_grants SET status = 'dormant' WHERE status = 'active' AND (source_worker_id = ? OR target_worker_id = ?)`).run(worker.worker_id, worker.worker_id);
+      }
+      this.audit("credential.dormant", null, sessionId, { reason });
+      this.audit("grant.dormant", null, sessionId, { reason, workerCount: workers.length });
+    }
+  }
+
+  reauthorize(actor: Actor, input: { workerId: string; sessionId: string; scopes: PeerScope[] }): { credentialId: string; token: string } {
+    this.require(actor, PEER_SCOPES.adminGrant);
+    const credential = this.issueCredential(input);
+    this.audit("credential.reauthorized", actor.worker_id, credential.credentialId, { workerId: input.workerId, sessionId: input.sessionId });
+    return credential;
   }
 
   private require(actor: Actor, scope: PeerScope): void {
