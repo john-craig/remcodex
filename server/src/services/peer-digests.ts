@@ -33,3 +33,40 @@ export function buildCoordinationDigest(
   }
   return { recipient: "orchestrator", generatedAt, entries: bounded };
 }
+
+export class PeerDigestScheduler {
+  private pending: CoordinationDigestEntry[] = [];
+  private timer: NodeJS.Timeout | null = null;
+
+  constructor(
+    private readonly deliver: (digest: CoordinationDigest) => Promise<void>,
+    private readonly cadenceMs = PEER_DIGEST_LIMITS.cadenceMs,
+    private readonly clock: () => Date = () => new Date(),
+  ) {}
+
+  start(): void {
+    if (this.timer) return;
+    this.timer = setInterval(() => {
+      void this.flush();
+    }, this.cadenceMs);
+    this.timer.unref();
+  }
+
+  stop(): void {
+    if (!this.timer) return;
+    clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  enqueue(entry: CoordinationDigestEntry): void {
+    this.pending.push(entry);
+  }
+
+  async flush(): Promise<CoordinationDigest | null> {
+    if (!this.pending.length) return null;
+    const digest = buildCoordinationDigest(this.pending, this.clock().toISOString());
+    await this.deliver(digest);
+    this.pending = this.pending.slice(digest.entries.length);
+    return digest;
+  }
+}

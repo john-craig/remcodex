@@ -9,6 +9,7 @@ import { createMessageRouter } from "./controllers/message.controller";
 import { createProjectRouter } from "./controllers/project.controller";
 import { createSessionRouter } from "./controllers/session.controller";
 import { createProfileRouter } from "./controllers/profile.controller";
+import { createPeerRouter } from "./controllers/peer.controller";
 import { handleRemCodexMcpRequest } from "./mcp";
 import { createDatabase } from "./db/client";
 import { runMigrations } from "./db/migrations";
@@ -39,6 +40,7 @@ import {
   type RemCodexRemoteInstance,
 } from "./utils/remcodex-remote-instances";
 import { resolveRemCodexPublicBaseUrl } from "./utils/remcodex-url";
+import { PeerCommunicationService } from "./services/peer-communication";
 import {
   defaultAgentEnvironmentRegistryPath,
   loadAgentEnvironmentRegistry,
@@ -120,6 +122,11 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
   runMigrations(db);
 
   const eventStore = new EventStore(db);
+  const peerCommunication = new PeerCommunicationService(
+    db,
+    undefined,
+    process.env.REMCODEX_PEER_ADMIN_TOKEN,
+  );
   const sessionTimeline = new SessionTimelineService(eventStore);
   const projectManager = new ProjectManager(db, projectRootsEnv, repoRoot);
   const remCodexConfig = loadRemCodexConfig(configPath);
@@ -142,6 +149,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
     codexCommand,
     codexMode,
     agentEnvironmentRegistry,
+    peerCommunication,
   });
   const mcpApiToken = resolveMcpApiToken();
 
@@ -178,6 +186,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
 
   app.use("/api/projects", createProjectRouter(projectManager));
   app.use("/api/profiles", createProfileRouter(profileManager));
+  app.use("/api/peer", createPeerRouter(peerCommunication));
   app.use(
     "/api/codex",
     createCodexOptionsRouter({
@@ -215,6 +224,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
             sessionTimeline,
             codexRolloutSync,
             profileManager,
+            peerCommunication,
           },
           {
             apiToken: mcpApiToken,

@@ -4,7 +4,7 @@ import test from "node:test";
 import { createDatabase } from "../server/src/db/client";
 import { runMigrations } from "../server/src/db/migrations";
 import { PEER_LIMITS, PEER_SCOPES, PeerCommunicationService } from "../server/src/services/peer-communication";
-import { buildCoordinationDigest, PEER_DIGEST_LIMITS } from "../server/src/services/peer-digests";
+import { buildCoordinationDigest, PEER_DIGEST_LIMITS, PeerDigestScheduler } from "../server/src/services/peer-digests";
 
 function setup(): PeerCommunicationService {
   const db = createDatabase(":memory:");
@@ -81,4 +81,14 @@ test("coordination digests are Orchestrator-directed, non-triggering, and bounde
   assert.equal(digest.recipient, "orchestrator");
   assert.equal(Buffer.byteLength(JSON.stringify(digest), "utf8") <= PEER_DIGEST_LIMITS.maxBytes, true);
   assert.equal(JSON.stringify(digest).includes("tool"), false);
+});
+
+test("coordination digest scheduler batches entries on the configured cadence seam", async () => {
+  const delivered: any[] = [];
+  const scheduler = new PeerDigestScheduler(async (digest) => { delivered.push(digest); }, 60_000, () => new Date("2026-01-01T00:00:00Z"));
+  scheduler.enqueue({ kind: "completion", workPackageId: "wp-1", summary: "done", occurredAt: "2026-01-01T00:00:00Z" });
+  assert.equal(await scheduler.flush() !== null, true);
+  assert.equal(delivered[0].recipient, "orchestrator");
+  assert.equal(await scheduler.flush(), null);
+  scheduler.stop();
 });

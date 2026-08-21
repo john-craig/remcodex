@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { CodexExecLaunchInput } from "../types/codex-launch";
-import type { CodexRunner } from "./codex-runner";
+import { buildCodexChildEnvironment, type CodexRunner } from "./codex-runner";
 import { buildCodexMcpToolPolicyOverrides } from "../utils/codex-launch";
 
 interface JsonRpcRequest {
@@ -56,15 +56,13 @@ export class CodexAppServerRunner implements CodexRunner {
     private readonly command: string,
     private readonly cwd: string,
     private readonly codexHome?: string | null,
+    private readonly peerCredential?: string | null,
   ) {}
 
   start(prompt: string, threadId?: string | null, launch?: CodexExecLaunchInput): number {
     this.process = spawn(this.command, ["app-server", "--listen", "stdio://"], {
       cwd: this.cwd,
-      env: {
-        ...process.env,
-        ...(this.codexHome ? { CODEX_HOME: this.codexHome } : {}),
-      },
+      env: buildCodexChildEnvironment(this.codexHome, this.peerCredential),
       stdio: "pipe",
     });
 

@@ -41,6 +41,7 @@ import {
 } from "./codex-stream-events";
 import { EventStore } from "./event-store";
 import { ProjectManager } from "./project-manager";
+import type { PeerCommunicationService } from "./peer-communication";
 
 interface MessageRuntimeState {
   messageId: string;
@@ -115,6 +116,7 @@ interface SessionManagerOptions {
   codexCommand: string;
   codexMode: CodexExecutionMode;
   agentEnvironmentRegistry?: AgentEnvironmentRegistry;
+  peerCommunication?: PeerCommunicationService;
 }
 
 const EMPTY_AGENT_ENVIRONMENT_REGISTRY: AgentEnvironmentRegistry = {
@@ -796,6 +798,11 @@ export class SessionManager {
       session.agent_environment
         ? resolveAgentEnvironment(this.options.agentEnvironmentRegistry ?? EMPTY_AGENT_ENVIRONMENT_REGISTRY, session.agent_environment)?.codexHome
         : null,
+      this.options.peerCommunication?.issueCredential({
+        workerId: `session:${session.id}`,
+        sessionId: session.id,
+        scopes: ["worker.peer.mailbox", "worker.peer.summary", "worker.peer.timeline", "worker.peer.digest"],
+      }).token,
     );
     const effectiveLaunch = this.withSessionWritableRoots(sessionId, codexLaunch);
     const runtime: RunnerState = {
@@ -1282,6 +1289,7 @@ export class SessionManager {
 
     this.advanceImportedRolloutCursorToCurrentEnd(sessionId, runtime.turnFinalized);
     this.setStatus(sessionId, "failed");
+    this.options.peerCommunication?.dormantSession(sessionId, "failed");
   }
 
   private advanceImportedRolloutCursorToCurrentEnd(

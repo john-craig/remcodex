@@ -66,7 +66,20 @@ function jsonBytes(value: unknown): number {
 }
 
 export class PeerCommunicationService {
-  constructor(private readonly db: DatabaseClient, private readonly clock: () => Date = () => new Date()) {}
+  constructor(
+    private readonly db: DatabaseClient,
+    private readonly clock: () => Date = () => new Date(),
+    adminToken?: string,
+  ) {
+    if (adminToken?.trim()) {
+      const token = adminToken.trim();
+      this.db.prepare(`INSERT OR IGNORE INTO peer_credentials (id, worker_id, session_id, token_hash, scopes_json, lease_expires_at) VALUES ('peer-admin', 'administrator', 'server', ?, ?, ?)`).run(
+        hashToken(token),
+        JSON.stringify([PEER_SCOPES.adminGrant, PEER_SCOPES.adminRevoke, PEER_SCOPES.adminAudit]),
+        new Date(this.clock().getTime() + 365 * 24 * 60 * 60 * 1_000).toISOString(),
+      );
+    }
+  }
 
   issueCredential(input: { workerId: string; sessionId: string; scopes: PeerScope[]; leaseMs?: number }): { credentialId: string; token: string } {
     if (!input.workerId.trim() || !input.sessionId.trim()) throw new AppError(400, "Worker and session identity are required.");
@@ -86,6 +99,13 @@ export class PeerCommunicationService {
       .run(credentialId, input.workerId, input.sessionId, hashToken(token), JSON.stringify(scopes), expires);
     this.audit("credential.issued", input.workerId, credentialId, { scopes, sessionId: input.sessionId });
     return { credentialId, token };
+  }
+
+  issueWorkerCredential(actor: Actor, input: { workerId: string; sessionId: string; scopes: PeerScope[]; leaseMs?: number }): { credentialId: string; token: string } {
+    this.require(actor, PEER_SCOPES.adminGrant);
+    const credential = this.issueCredential(input);
+    this.audit("credential.issued_by_admin", actor.worker_id, credential.credentialId, { workerId: input.workerId, sessionId: input.sessionId });
+    return credential;
   }
 
   authenticate(token: string): Actor {
@@ -144,7 +164,7 @@ export class PeerCommunicationService {
     return { ...input, id: messageId, senderWorkerId: actor.worker_id, createdAt: now() };
   }
 
-  readMailbox(token: string, grantId: string, limit = PEER_LIMITS.maxMessagesPerRead): { messages: PeerEnvelope[]; nextCursor: string | null } {
+  readMailbox(token: string, grantId: string, limit: number = PEER_LIMITS.maxMessagesPerRead): { messages: PeerEnvelope[]; nextCursor: string | null } {
     const actor = this.authenticate(token);
     this.require(actor, PEER_SCOPES.workerMailbox);
     const grant = this.authorizedGrant(actor, undefined, undefined, PEER_SCOPES.workerMailbox, grantId, true);
@@ -182,7 +202,7 @@ export class PeerCommunicationService {
     return row ? JSON.parse(row.summary_json) : null;
   }
 
-  readTimeline(token: string, grantId: string, limit = PEER_LIMITS.maxTimelineEntries): PeerEnvelope[] {
+  readTimeline(token: string, grantId: string, limit: number = PEER_LIMITS.maxTimelineEntries): PeerEnvelope[] {
     const actor = this.authenticate(token);
     this.require(actor, PEER_SCOPES.workerTimeline);
     const grant = this.authorizedGrant(actor, undefined, undefined, PEER_SCOPES.workerTimeline, grantId, true);
