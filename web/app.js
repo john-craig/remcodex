@@ -58,6 +58,11 @@ import {
 } from "./session-timeline-reducer.js";
 import { renderTimeline, renderTimelineList } from "./session-timeline-renderer.js";
 import { connectSessionSocket } from "./session-ws.js";
+import {
+  buildReplySocketConnectionId,
+  classifyReplyEvent,
+  summarizeReplyEvent,
+} from "./session-reply-diagnostics.js";
 
 const app = document.querySelector("#app");
 const SESSION_VIEW_STORAGE_KEY = "remote-agent-console.sessions.view";
@@ -969,7 +974,16 @@ function mergeDetailTimelineRawEvents(nextRawEvents) {
 
   const filteredRawEvents = nextRawEvents.filter((rawEvent) => {
     const eventSessionId = String(rawEvent?.sessionId || rawEvent?.session_id || "").trim();
-    return !eventSessionId || eventSessionId === activeSessionId;
+    const matches = !eventSessionId || eventSessionId === activeSessionId;
+    if (!matches) {
+      pushClientDebugLog("warn", "Discarding session event for inactive session", {
+        sessionId: activeSessionId,
+        eventSessionId,
+        correlationId: getReplyCorrelationId(),
+        ...summarizeReplyEvent(rawEvent),
+      });
+    }
+    return matches;
   });
 
   if (filteredRawEvents.length === 0) {
@@ -985,12 +999,43 @@ function mergeDetailTimelineRawEvents(nextRawEvents) {
   let canApplyIncrementally = true;
 
   filteredRawEvents.forEach((rawEvent) => {
-    if (!rawEvent?.id || existingIds.has(rawEvent.id)) {
+    const classification = classifyReplyEvent(rawEvent, {
+      knownEventIds: existingIds,
+      lastSeq: currentMaxSeq,
+    });
+    if (classification.classification === "duplicate") {
+      pushClientDebugLog("debug", "Ignoring duplicate session event", {
+        sessionId: activeSessionId,
+        correlationId: getReplyCorrelationId(),
+        ...classification,
+      });
+      return;
+    }
+    if (!rawEvent?.id) {
+      pushClientDebugLog("warn", "Ignoring session event without stable id", {
+        sessionId: activeSessionId,
+        correlationId: getReplyCorrelationId(),
+        ...classification,
+      });
       return;
     }
 
     existingIds.add(rawEvent.id);
     appended.push(rawEvent);
+    if (["delayed", "same_sequence"].includes(classification.classification)) {
+      pushClientDebugLog("warn", "Applying out-of-order session event", {
+        sessionId: activeSessionId,
+        correlationId: getReplyCorrelationId(),
+        ...classification,
+      });
+    }
+    if (classification.classification === "gap") {
+      pushClientDebugLog("warn", "Session event sequence gap detected", {
+        sessionId: activeSessionId,
+        correlationId: getReplyCorrelationId(),
+        ...classification,
+      });
+    }
     if (Number(rawEvent.seq || 0) < currentMaxSeq) {
       canApplyIncrementally = false;
     }
@@ -1002,6 +1047,7 @@ function mergeDetailTimelineRawEvents(nextRawEvents) {
 
   pushClientDebugLog("debug", "Merging timeline events", {
     sessionId: activeSessionId,
+    correlationId: getReplyCorrelationId(),
     incomingCount: nextRawEvents.length,
     appendedCount: appended.length,
     incremental: canApplyIncrementally,
@@ -1016,6 +1062,11 @@ function mergeDetailTimelineRawEvents(nextRawEvents) {
   );
 
   if (!canApplyIncrementally) {
+    pushClientDebugLog("info", "Replaying timeline after delayed event", {
+      sessionId: activeSessionId,
+      correlationId: getReplyCorrelationId(),
+      appendedCount: appended.length,
+    });
     state.detail.timelineState = buildTimelineStateFromRawEvents(state.detail.rawEvents);
     state.detail.timelineItems = buildTimelineView(state.detail.timelineState);
     maybeClearOptimisticSendFromTimeline();
@@ -1024,10 +1075,28 @@ function mergeDetailTimelineRawEvents(nextRawEvents) {
   }
 
   const normalizedAppended = normalizeRawSessionEvents(appended);
+  const normalizedSourceCount = appended.reduce(
+    (count, rawEvent) => count + (normalizeRawSessionEvent(rawEvent) ? 1 : 0),
+    0,
+  );
+  if (normalizedSourceCount !== appended.length) {
+    pushClientDebugLog("warn", "Session events were not normalized for timeline", {
+      sessionId: activeSessionId,
+      correlationId: getReplyCorrelationId(),
+      receivedCount: appended.length,
+      normalizedSourceCount,
+      expandedTimelineEventCount: normalizedAppended.length,
+      droppedCount: appended.length - normalizedSourceCount,
+    });
+  }
   reduceTimelineBatch(state.detail.timelineState, normalizedAppended);
   state.detail.timelineItems = buildTimelineView(state.detail.timelineState);
   maybeClearOptimisticSendFromTimeline();
   syncDetailPendingApproval(state.detail.session, state.detail.timelineState);
+}
+
+function getReplyCorrelationId() {
+  return String(state.detail.replyCorrelationId || "").trim() || null;
 }
 
 function getActiveDetailSessionId() {
@@ -1048,6 +1117,7 @@ async function catchUpSessionEvents(sessionId, afterSeq) {
 
   pushClientDebugLog("debug", "Catching up session events", {
     sessionId: normalizedSessionId,
+    correlationId: getReplyCorrelationId(),
     afterSeq: nextAfter,
   });
   try {
@@ -1067,12 +1137,22 @@ async function catchUpSessionEvents(sessionId, afterSeq) {
       const items = Array.isArray(payload?.items)
         ? payload.items.filter((item) => {
             const eventSessionId = String(item?.sessionId || item?.session_id || "").trim();
-            return !eventSessionId || eventSessionId === normalizedSessionId;
+            const matches = !eventSessionId || eventSessionId === normalizedSessionId;
+            if (!matches) {
+              pushClientDebugLog("warn", "Discarding catch-up event for inactive session", {
+                sessionId: normalizedSessionId,
+                eventSessionId,
+                correlationId: getReplyCorrelationId(),
+                ...summarizeReplyEvent(item),
+              });
+            }
+            return matches;
           })
         : [];
       if (items.length === 0) {
         pushClientDebugLog("debug", "Catch-up returned no new events", {
           sessionId: normalizedSessionId,
+          correlationId: getReplyCorrelationId(),
           page,
           afterSeq: nextAfter,
         });
@@ -1085,6 +1165,7 @@ async function catchUpSessionEvents(sessionId, afterSeq) {
       state.detail.cursor = Math.max(state.detail.cursor, nextAfter);
       pushClientDebugLog("debug", "Catch-up applied events", {
         sessionId: normalizedSessionId,
+        correlationId: getReplyCorrelationId(),
         page,
         appliedCount: items.length,
         nextCursor: nextAfter,
@@ -1097,6 +1178,7 @@ async function catchUpSessionEvents(sessionId, afterSeq) {
   } catch (error) {
     pushClientDebugLog("warn", "Catch-up failed", {
       sessionId: normalizedSessionId,
+      correlationId: getReplyCorrelationId(),
       afterSeq: nextAfter,
       error: messageOf(error),
     });
@@ -1647,6 +1729,8 @@ const state = {
   },
   detail: {
     session: null,
+    replyCorrelationId: "",
+    replySocketAttempt: 0,
     rawEvents: [],
     timelineState: createEmptyTimelineState(),
     timelineItems: [],
@@ -3902,12 +3986,14 @@ async function renderSessionDetailPage(sessionId) {
   if (previousSessionId !== normalizedSessionId) {
     state.detail.dismissedApprovalKeys = {};
     state.detail.clientLogs = [];
+    state.detail.replySocketAttempt = 0;
     state.detail.startingPrompt = "";
   }
 
   state.workspace.activeSessionId = normalizedSessionId;
   const loadRequestId = Number(state.detail.loadRequestId || 0) + 1;
   state.detail.loadRequestId = loadRequestId;
+  state.detail.replyCorrelationId = `reply-ui:${normalizedSessionId}:${loadRequestId}`;
   pushClientDebugLog("info", "Opening session detail", {
     sessionId: normalizedSessionId,
     previousSessionId,
@@ -4780,8 +4866,14 @@ function attachSessionSocket(sessionId) {
   cleanupSocket();
   pushClientDebugLog("debug", "Connecting session socket", {
     sessionId: normalizedSessionId,
+    correlationId: getReplyCorrelationId(),
   });
+  state.detail.replySocketAttempt = Number(state.detail.replySocketAttempt || 0) + 1;
   const socket = connectSessionSocket(normalizedSessionId, {
+    connectionId: buildReplySocketConnectionId(
+      getReplyCorrelationId(),
+      state.detail.replySocketAttempt,
+    ),
     onLog(entry) {
       pushClientDebugLog(entry.level, entry.message, entry.details);
     },
@@ -4792,6 +4884,7 @@ function attachSessionSocket(sessionId) {
 
       pushClientDebugLog("debug", "Session socket state changed", {
         sessionId: normalizedSessionId,
+        correlationId: getReplyCorrelationId(),
         state: nextState,
       });
       state.socketState = nextState;
@@ -4811,10 +4904,12 @@ function attachSessionSocket(sessionId) {
 
       pushClientDebugLog("debug", "Session socket event received", {
         sessionId: normalizedSessionId,
+        correlationId: getReplyCorrelationId(),
         eventType: event.type || "",
         seq: Number(event.seq || 0),
         turnId: event.turnId || "",
         status: event.status || "",
+        ...summarizeReplyEvent(event),
       });
       if (state.detail.session) {
         state.detail.session.updatedAt = new Date().toISOString();
