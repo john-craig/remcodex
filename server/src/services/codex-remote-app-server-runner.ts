@@ -3,6 +3,7 @@ import WebSocket from "ws";
 
 import type { CodexExecLaunchInput } from "../types/codex-launch";
 import type { CodexRunner } from "./codex-runner";
+import { buildCodexMcpToolPolicyOverrides } from "../utils/codex-launch";
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -164,6 +165,11 @@ export class CodexRemoteAppServerRunner implements CodexRunner {
     const config: Record<string, unknown> = {};
     for (const name of launch?.enableFeatures ?? []) config[`features.${name}`] = true;
     for (const name of launch?.disableFeatures ?? []) config[`features.${name}`] = false;
+    Object.assign(config, buildCodexMcpToolPolicyOverrides(
+      launch?.allowedTools || launch?.deniedTools
+        ? { allowedTools: launch.allowedTools, deniedTools: launch.deniedTools }
+        : undefined,
+    ));
     if (launch?.profile) config.profile = launch.profile;
 
     let cursor: string | null = null;

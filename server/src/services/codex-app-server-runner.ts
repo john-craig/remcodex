@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { CodexExecLaunchInput } from "../types/codex-launch";
 import type { CodexRunner } from "./codex-runner";
+import { buildCodexMcpToolPolicyOverrides } from "../utils/codex-launch";
 
 interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -54,12 +55,16 @@ export class CodexAppServerRunner implements CodexRunner {
   constructor(
     private readonly command: string,
     private readonly cwd: string,
+    private readonly codexHome?: string | null,
   ) {}
 
   start(prompt: string, threadId?: string | null, launch?: CodexExecLaunchInput): number {
     this.process = spawn(this.command, ["app-server", "--listen", "stdio://"], {
       cwd: this.cwd,
-      env: process.env,
+      env: {
+        ...process.env,
+        ...(this.codexHome ? { CODEX_HOME: this.codexHome } : {}),
+      },
       stdio: "pipe",
     });
 
@@ -226,6 +231,12 @@ export class CodexAppServerRunner implements CodexRunner {
         config[`features.${name}`] = false;
       }
     }
+
+    Object.assign(config, buildCodexMcpToolPolicyOverrides(
+      launch?.allowedTools || launch?.deniedTools
+        ? { allowedTools: launch.allowedTools, deniedTools: launch.deniedTools }
+        : undefined,
+    ));
 
     return Object.keys(config).length > 0 ? config : null;
   }

@@ -188,6 +188,7 @@ export interface AgentProfileRecord {
   name: string;
   starting_prompt: string;
   default_directory: string;
+  agent_environment: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -200,6 +201,7 @@ export interface SessionRecord {
   pid: number | null;
   codex_thread_id: string | null;
   parent_session_id: string | null;
+  agent_environment: string | null;
   starting_prompt: string;
   description: string | null;
   tags: string[];

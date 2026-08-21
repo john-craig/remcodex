@@ -8,6 +8,7 @@ import { SessionTimelineService } from "../services/session-timeline-service";
 import { CodexAppServerRegistryService } from "../services/codex-app-server-registry";
 import { normalizeCodexExecLaunchInput } from "../utils/codex-launch";
 import { buildRemCodexSessionUrl } from "../utils/remcodex-url";
+import { AgentProfileManager } from "../services/agent-profile-manager";
 
 export function createSessionRouter(
   sessionManager: SessionManager,
@@ -16,6 +17,7 @@ export function createSessionRouter(
   codexRolloutSync: CodexRolloutSyncService,
   appServerRegistry: CodexAppServerRegistryService,
   sessionTimeline: SessionTimelineService,
+  profileManager?: AgentProfileManager,
 ): Router {
   const router = Router();
 
@@ -23,33 +25,35 @@ export function createSessionRouter(
     const appServers = await appServerRegistry.sync();
     const liveAppServerIds = new Set(appServers.map((appServer) => appServer.id));
     const items = sessionManager.listSessions().map((session) => ({
-      sessionId: session.id,
-      title: session.title,
-      projectId: session.project_id,
-      parentSessionId: session.parent_session_id,
-      status: session.status,
-      liveBusy: sessionManager.isLiveBusy(session.id),
-      codexThreadId: session.codex_thread_id,
-      description: session.description,
-      tags: session.tags,
-      metadata: session.metadata,
-      startingPrompt: session.starting_prompt,
-      sourceKind: session.source_kind,
-      sourceRolloutPath: session.source_rollout_path,
-      sourceThreadId: session.source_thread_id,
-      sourceRolloutHasOpenTurn: session.source_rollout_has_open_turn === 1,
-      appServerId: session.app_server_id,
-      appServerEndpoint: session.app_server_endpoint,
-      appServerPid: session.app_server_pid,
-      appServerConnected: Boolean(session.app_server_id && liveAppServerIds.has(session.app_server_id)),
-      pendingApproval: sessionManager.getPendingApproval(session.id),
-      lastEventAt: session.last_event_at,
-      lastAssistantContent: session.last_assistant_content,
-      lastCommand: session.last_command,
-      eventCount: session.event_count,
-      createdAt: session.created_at,
-      updatedAt: session.updated_at,
-    }));
+        sessionId: session.id,
+        sessionUrl: buildRemCodexSessionUrl(session.id),
+        agentEnvironment: session.agent_environment,
+        title: session.title,
+        projectId: session.project_id,
+        parentSessionId: session.parent_session_id,
+        status: session.status,
+        liveBusy: sessionManager.isLiveBusy(session.id),
+        codexThreadId: session.codex_thread_id,
+        description: session.description,
+        tags: session.tags,
+        metadata: session.metadata,
+        startingPrompt: session.starting_prompt,
+        sourceKind: session.source_kind,
+        sourceRolloutPath: session.source_rollout_path,
+        sourceThreadId: session.source_thread_id,
+        sourceRolloutHasOpenTurn: session.source_rollout_has_open_turn === 1,
+        appServerId: session.app_server_id,
+        appServerEndpoint: session.app_server_endpoint,
+        appServerPid: session.app_server_pid,
+        appServerConnected: Boolean(session.app_server_id && liveAppServerIds.has(session.app_server_id)),
+        pendingApproval: sessionManager.getPendingApproval(session.id),
+        lastEventAt: session.last_event_at,
+        lastAssistantContent: session.last_assistant_content,
+        lastCommand: session.last_command,
+        eventCount: session.event_count,
+        createdAt: session.created_at,
+        updatedAt: session.updated_at,
+      }));
 
     response.json({ items });
   });
@@ -78,7 +82,14 @@ export function createSessionRouter(
         tags?: string[];
         metadata?: Record<string, unknown>;
         parentSessionId?: string;
+        profile?: string;
+        agentEnvironment?: string | null;
       };
+      const profile = body.profile ? profileManager?.getProfile(body.profile) ?? null : null;
+      if (body.profile && !profile) {
+        response.status(400).json({ error: "Profile not found." });
+        return;
+      }
       const session = sessionManager.createSession({
         title: body.title,
         projectId: body.projectId ?? "",
@@ -87,10 +98,13 @@ export function createSessionRouter(
         tags: body.tags,
         metadata: body.metadata,
         parentSessionId: body.parentSessionId,
+        agentEnvironment: body.agentEnvironment ?? profile?.agent_environment,
       });
 
       response.status(201).json({
         sessionId: session.id,
+        sessionUrl: buildRemCodexSessionUrl(session.id),
+        agentEnvironment: session.agent_environment,
         status: session.status,
         parentSessionId: session.parent_session_id,
         startingPrompt: session.starting_prompt,
@@ -118,6 +132,7 @@ export function createSessionRouter(
         title: session.title,
         projectId: session.project_id,
         parentSessionId: session.parent_session_id,
+        agentEnvironment: session.agent_environment,
         projectName: project?.name ?? null,
         projectPath: project?.path ?? null,
         status: session.status,

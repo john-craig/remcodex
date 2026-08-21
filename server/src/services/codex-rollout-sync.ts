@@ -94,7 +94,10 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function resolveCodexHomeDir(): string {
+export function resolveCodexHomeDir(codexHome?: string | null): string {
+  if (codexHome?.trim()) {
+    return path.resolve(codexHome);
+  }
   const override = process.env.CODEX_HOME?.trim();
   if (override) {
     return path.resolve(override);
@@ -844,8 +847,8 @@ function translateRolloutRecords(
 export class CodexRolloutSyncService {
   constructor(private readonly db: DatabaseClient) {}
 
-  listImportableSessions(limit = 20): ImportableCodexSessionRecord[] {
-    const rolloutRoot = path.join(resolveCodexHomeDir(), "sessions");
+  listImportableSessions(limit = 20, codexHome?: string | null): ImportableCodexSessionRecord[] {
+    const rolloutRoot = path.join(resolveCodexHomeDir(codexHome), "sessions");
     const rolloutPaths = scanRolloutPaths(rolloutRoot).slice(0, Math.max(1, limit));
     const importedByPath = new Map<
       string,

@@ -9,6 +9,7 @@ import {
   getCodexUiOptions,
   getCodexStatus,
   getHealth,
+  getAgentEnvironments,
   getProjects,
   getProfiles,
   getSession,
@@ -58,6 +59,12 @@ import {
 } from "./session-timeline-reducer.js";
 import { renderTimeline, renderTimelineList } from "./session-timeline-renderer.js";
 import { connectSessionSocket } from "./session-ws.js";
+import { sessionMatchesSearch } from "./utils/session-search.js";
+import {
+  buildReplySocketConnectionId,
+  classifyReplyEvent,
+  summarizeReplyEvent,
+} from "./session-reply-diagnostics.js";
 
 const app = document.querySelector("#app");
 const SESSION_VIEW_STORAGE_KEY = "remote-agent-console.sessions.view";
@@ -244,6 +251,7 @@ function renderAppChrome({
   const nav = `<nav class="app-top-nav" aria-label="${escapeHtml(t("nav.sessions"))}">
     <a href="#/projects" class="app-nav-link">${escapeHtml(t("nav.projects"))}</a>
     <a href="#/sessions" class="app-nav-link">${escapeHtml(t("nav.sessions"))}</a>
+    <a href="#/sessions?status=running" class="app-nav-link">${escapeHtml(t("sessions.runningView"))}</a>
   </nav>`;
 
   if (variant === "marketing") {
@@ -969,7 +977,16 @@ function mergeDetailTimelineRawEvents(nextRawEvents) {
 
   const filteredRawEvents = nextRawEvents.filter((rawEvent) => {
     const eventSessionId = String(rawEvent?.sessionId || rawEvent?.session_id || "").trim();
-    return !eventSessionId || eventSessionId === activeSessionId;
+    const matches = !eventSessionId || eventSessionId === activeSessionId;
+    if (!matches) {
+      pushClientDebugLog("warn", "Discarding session event for inactive session", {
+        sessionId: activeSessionId,
+        eventSessionId,
+        correlationId: getReplyCorrelationId(),
+        ...summarizeReplyEvent(rawEvent),
+      });
+    }
+    return matches;
   });
 
   if (filteredRawEvents.length === 0) {
@@ -985,12 +1002,43 @@ function mergeDetailTimelineRawEvents(nextRawEvents) {
   let canApplyIncrementally = true;
 
   filteredRawEvents.forEach((rawEvent) => {
-    if (!rawEvent?.id || existingIds.has(rawEvent.id)) {
+    const classification = classifyReplyEvent(rawEvent, {
+      knownEventIds: existingIds,
+      lastSeq: currentMaxSeq,
+    });
+    if (classification.classification === "duplicate") {
+      pushClientDebugLog("debug", "Ignoring duplicate session event", {
+        sessionId: activeSessionId,
+        correlationId: getReplyCorrelationId(),
+        ...classification,
+      });
+      return;
+    }
+    if (!rawEvent?.id) {
+      pushClientDebugLog("warn", "Ignoring session event without stable id", {
+        sessionId: activeSessionId,
+        correlationId: getReplyCorrelationId(),
+        ...classification,
+      });
       return;
     }
 
     existingIds.add(rawEvent.id);
     appended.push(rawEvent);
+    if (["delayed", "same_sequence"].includes(classification.classification)) {
+      pushClientDebugLog("warn", "Applying out-of-order session event", {
+        sessionId: activeSessionId,
+        correlationId: getReplyCorrelationId(),
+        ...classification,
+      });
+    }
+    if (classification.classification === "gap") {
+      pushClientDebugLog("warn", "Session event sequence gap detected", {
+        sessionId: activeSessionId,
+        correlationId: getReplyCorrelationId(),
+        ...classification,
+      });
+    }
     if (Number(rawEvent.seq || 0) < currentMaxSeq) {
       canApplyIncrementally = false;
     }
@@ -1002,6 +1050,7 @@ function mergeDetailTimelineRawEvents(nextRawEvents) {
 
   pushClientDebugLog("debug", "Merging timeline events", {
     sessionId: activeSessionId,
+    correlationId: getReplyCorrelationId(),
     incomingCount: nextRawEvents.length,
     appendedCount: appended.length,
     incremental: canApplyIncrementally,
@@ -1016,6 +1065,11 @@ function mergeDetailTimelineRawEvents(nextRawEvents) {
   );
 
   if (!canApplyIncrementally) {
+    pushClientDebugLog("info", "Replaying timeline after delayed event", {
+      sessionId: activeSessionId,
+      correlationId: getReplyCorrelationId(),
+      appendedCount: appended.length,
+    });
     state.detail.timelineState = buildTimelineStateFromRawEvents(state.detail.rawEvents);
     state.detail.timelineItems = buildTimelineView(state.detail.timelineState);
     maybeClearOptimisticSendFromTimeline();
@@ -1024,10 +1078,28 @@ function mergeDetailTimelineRawEvents(nextRawEvents) {
   }
 
   const normalizedAppended = normalizeRawSessionEvents(appended);
+  const normalizedSourceCount = appended.reduce(
+    (count, rawEvent) => count + (normalizeRawSessionEvent(rawEvent) ? 1 : 0),
+    0,
+  );
+  if (normalizedSourceCount !== appended.length) {
+    pushClientDebugLog("warn", "Session events were not normalized for timeline", {
+      sessionId: activeSessionId,
+      correlationId: getReplyCorrelationId(),
+      receivedCount: appended.length,
+      normalizedSourceCount,
+      expandedTimelineEventCount: normalizedAppended.length,
+      droppedCount: appended.length - normalizedSourceCount,
+    });
+  }
   reduceTimelineBatch(state.detail.timelineState, normalizedAppended);
   state.detail.timelineItems = buildTimelineView(state.detail.timelineState);
   maybeClearOptimisticSendFromTimeline();
   syncDetailPendingApproval(state.detail.session, state.detail.timelineState);
+}
+
+function getReplyCorrelationId() {
+  return String(state.detail.replyCorrelationId || "").trim() || null;
 }
 
 function getActiveDetailSessionId() {
@@ -1048,6 +1120,7 @@ async function catchUpSessionEvents(sessionId, afterSeq) {
 
   pushClientDebugLog("debug", "Catching up session events", {
     sessionId: normalizedSessionId,
+    correlationId: getReplyCorrelationId(),
     afterSeq: nextAfter,
   });
   try {
@@ -1067,12 +1140,22 @@ async function catchUpSessionEvents(sessionId, afterSeq) {
       const items = Array.isArray(payload?.items)
         ? payload.items.filter((item) => {
             const eventSessionId = String(item?.sessionId || item?.session_id || "").trim();
-            return !eventSessionId || eventSessionId === normalizedSessionId;
+            const matches = !eventSessionId || eventSessionId === normalizedSessionId;
+            if (!matches) {
+              pushClientDebugLog("warn", "Discarding catch-up event for inactive session", {
+                sessionId: normalizedSessionId,
+                eventSessionId,
+                correlationId: getReplyCorrelationId(),
+                ...summarizeReplyEvent(item),
+              });
+            }
+            return matches;
           })
         : [];
       if (items.length === 0) {
         pushClientDebugLog("debug", "Catch-up returned no new events", {
           sessionId: normalizedSessionId,
+          correlationId: getReplyCorrelationId(),
           page,
           afterSeq: nextAfter,
         });
@@ -1085,6 +1168,7 @@ async function catchUpSessionEvents(sessionId, afterSeq) {
       state.detail.cursor = Math.max(state.detail.cursor, nextAfter);
       pushClientDebugLog("debug", "Catch-up applied events", {
         sessionId: normalizedSessionId,
+        correlationId: getReplyCorrelationId(),
         page,
         appliedCount: items.length,
         nextCursor: nextAfter,
@@ -1097,6 +1181,7 @@ async function catchUpSessionEvents(sessionId, afterSeq) {
   } catch (error) {
     pushClientDebugLog("warn", "Catch-up failed", {
       sessionId: normalizedSessionId,
+      correlationId: getReplyCorrelationId(),
       afterSeq: nextAfter,
       error: messageOf(error),
     });
@@ -1615,6 +1700,8 @@ const state = {
     newSessionProfileMenuOpen: false,
     activeSessionId: "",
     profiles: [],
+    agentEnvironments: [],
+    selectedAgentEnvironment: "",
     expandedSessionIds: readWorkspaceExpandedSessionIds(),
     collapsedSessionIds: readWorkspaceCollapsedSessionIds(),
     createDialog: {
@@ -1647,6 +1734,8 @@ const state = {
   },
   detail: {
     session: null,
+    replyCorrelationId: "",
+    replySocketAttempt: 0,
     rawEvents: [],
     timelineState: createEmptyTimelineState(),
     timelineItems: [],
@@ -1732,7 +1821,7 @@ function renderRoute() {
   state.route = hash;
 
   const matched = route.path.match(/^#\/sessions\/([^/]+)$/);
-  hydrateSessionsViewState("");
+  hydrateSessionsViewState(matched ? "" : route.query);
   if (matched) {
     hydrateSessionDetailViewState(route.query);
   } else {
@@ -1911,6 +2000,8 @@ function closeWorkspaceNewSessionProfileMenu(selectedSessionId = state.workspace
 
 function setWorkspaceNewSessionProfile(profileName, selectedSessionId = state.workspace.activeSessionId) {
   persistWorkspaceNewSessionProfile(profileName);
+  const profile = getWorkspaceNewSessionProfile(profileName);
+  state.workspace.selectedAgentEnvironment = String(profile?.agent_environment || "").trim();
   state.workspace.newSessionProfileMenuOpen = false;
   patchWorkspaceSidebar(selectedSessionId);
 }
@@ -2100,7 +2191,11 @@ function renderWorkspaceSessionRow(row, selectedSessionId = "", selectedSessionI
   `;
 }
 
-async function createWorkspaceSessionForProjectPath(projectPath, startingPrompt = "") {
+async function createWorkspaceSessionForProjectPath(
+  projectPath,
+  startingPrompt = "",
+  agentEnvironment = state.workspace.selectedAgentEnvironment,
+) {
   const normalizedProjectPath = normalizeProjectPathForComparison(projectPath);
   if (!normalizedProjectPath) {
     throw new Error("Profile default directory is missing.");
@@ -2136,6 +2231,7 @@ async function createWorkspaceSessionForProjectPath(projectPath, startingPrompt 
   const session = await createSession({
     projectId: project.projectId,
     startingPrompt: normalizeSessionStartingPrompt(startingPrompt || ""),
+    agentEnvironment: agentEnvironment || undefined,
   });
   return session;
 }
@@ -2164,7 +2260,11 @@ async function startWorkspaceNewSessionFromSelectedProfile(selectedSessionId = s
     state.detail.codexLaunch.profile = "";
   }
   const startingPrompt = normalizeSessionStartingPrompt(profile?.starting_prompt || "");
-  const session = await createWorkspaceSessionForProjectPath(defaultDirectory, startingPrompt);
+  const session = await createWorkspaceSessionForProjectPath(
+    defaultDirectory,
+    startingPrompt,
+    profile?.agent_environment || "",
+  );
   window.location.hash = buildSessionDetailHash(
     session.sessionId,
     state.detail.filter,
@@ -2270,6 +2370,13 @@ function renderWorkspaceCreateSessionDialog() {
   const projects = Array.isArray(state.sessions.projects) ? state.sessions.projects : [];
   const selectedProject =
     projects.find((project) => project.projectId === dialogState.selectedProjectId) || projects[0] || null;
+  const agentEnvironmentOptions = [
+    { name: "", label: t("workspace.create.agentEnvironmentLegacy") },
+    ...(Array.isArray(state.workspace.agentEnvironments) ? state.workspace.agentEnvironments : []).map((item) => ({
+      name: String(item?.name || ""),
+      label: String(item?.name || ""),
+    })),
+  ];
 
   if (dialogState.mode === "pick-project") {
     return `
@@ -2308,6 +2415,17 @@ function renderWorkspaceCreateSessionDialog() {
                 </div>
               `
           }
+          <label class="workspace-dialog-field">
+            <span>${escapeHtml(t("workspace.create.agentEnvironment"))}</span>
+            <select id="workspace-agent-environment" class="workspace-dialog-input">
+              ${agentEnvironmentOptions
+                .map(
+                  (item) =>
+                    `<option value="${escapeHtml(item.name)}" ${state.workspace.selectedAgentEnvironment === item.name ? "selected" : ""}>${escapeHtml(item.label)}</option>`,
+                )
+                .join("")}
+            </select>
+          </label>
         </div>
         <div class="workspace-dialog-foot workspace-dialog-foot-split">
           <div class="workspace-dialog-secondary-actions">
@@ -2355,6 +2473,17 @@ function renderWorkspaceCreateSessionDialog() {
         <div class="workspace-dialog-help">
           ${escapeHtml(t("workspace.create.projectHelp"))}
         </div>
+        <label class="workspace-dialog-field">
+          <span>${escapeHtml(t("workspace.create.agentEnvironment"))}</span>
+          <select id="workspace-agent-environment" class="workspace-dialog-input">
+            ${agentEnvironmentOptions
+              .map(
+                (item) =>
+                  `<option value="${escapeHtml(item.name)}" ${state.workspace.selectedAgentEnvironment === item.name ? "selected" : ""}>${escapeHtml(item.label)}</option>`,
+              )
+              .join("")}
+          </select>
+        </label>
         <div class="workspace-dialog-field">
           <span>${escapeHtml(t("workspace.create.currentDirectory"))}</span>
           <div class="workspace-directory-browser">
@@ -2734,7 +2863,10 @@ async function submitWorkspaceCreateSession() {
   patchWorkspaceModalSlot();
 
   try {
-    const session = await createSession({ projectId });
+    const session = await createSession({
+      projectId,
+      agentEnvironment: state.workspace.selectedAgentEnvironment || undefined,
+    });
     closeWorkspaceCreateDialog();
     window.location.hash = buildSessionDetailHash(
       session.sessionId,
@@ -2775,7 +2907,10 @@ async function submitWorkspaceProjectDialog() {
         path: targetPath,
         createMissing: createInSelectedDirectory,
       }));
-    const session = await createSession({ projectId: project.projectId });
+    const session = await createSession({
+      projectId: project.projectId,
+      agentEnvironment: state.workspace.selectedAgentEnvironment || undefined,
+    });
     closeWorkspaceCreateDialog();
     window.location.hash = buildSessionDetailHash(
       session.sessionId,
@@ -3037,6 +3172,13 @@ function bindWorkspaceCreateDialogControls() {
     };
   });
 
+  const agentEnvironmentSelect = document.querySelector("#workspace-agent-environment");
+  if (agentEnvironmentSelect instanceof HTMLSelectElement) {
+    agentEnvironmentSelect.onchange = () => {
+      state.workspace.selectedAgentEnvironment = agentEnvironmentSelect.value;
+    };
+  }
+
   const submitSessionButton = document.querySelector("#workspace-create-session-submit");
   if (submitSessionButton instanceof HTMLButtonElement) {
     submitSessionButton.onclick = async () => {
@@ -3258,9 +3400,16 @@ async function renderWorkspacePage(routeSessionId) {
   bindWorkspaceImportDialogControls();
 
   try {
-    const [sessions, projects] = await Promise.all([getSessions(), getProjects()]);
+    const [sessions, projects, agentEnvironmentResult] = await Promise.all([
+      getSessions(),
+      getProjects(),
+      getAgentEnvironments().catch(() => ({ items: [] })),
+    ]);
     state.sessions.items = sessions.items;
     state.sessions.projects = projects.items;
+    state.workspace.agentEnvironments = Array.isArray(agentEnvironmentResult?.items)
+      ? agentEnvironmentResult.items
+      : [];
 
     const selectedSessionId = resolveWorkspaceSessionId(routeSessionId);
     state.workspace.activeSessionId = selectedSessionId;
@@ -3685,6 +3834,7 @@ function renderSessionsList() {
                             <span class="pill ${statusClass(displayStatus)}">${escapeHtml(sessionStatusLabel(displayStatus))}</span>
                           </div>
                           <p class="record-meta">${escapeHtml(t("sessions.projectMeta", { value: project?.name || session.projectId }))}</p>
+                          <p class="record-meta">${escapeHtml(project?.path || t("sessions.workingDirectoryMissing"))}</p>
                           <p class="record-meta">${escapeHtml(t("sessions.lastEventMeta", { value: session.lastEventAt || t("generic.none") }))}</p>
                           <div class="summary-strip">
                             <span class="summary-chip">${escapeHtml(t("sessions.eventCount", { count: session.eventCount ?? 0 }))}</span>
@@ -3717,6 +3867,11 @@ function renderSessionsList() {
                               : ""
                           }
                         </button>
+                        ${
+                          session.sessionUrl
+                            ? `<a class="session-open-link" href="${escapeHtml(session.sessionUrl)}">${escapeHtml(t("sessions.openSession"))}</a>`
+                            : ""
+                        }
                       </div>
                     `;
                   })
@@ -3902,12 +4057,14 @@ async function renderSessionDetailPage(sessionId) {
   if (previousSessionId !== normalizedSessionId) {
     state.detail.dismissedApprovalKeys = {};
     state.detail.clientLogs = [];
+    state.detail.replySocketAttempt = 0;
     state.detail.startingPrompt = "";
   }
 
   state.workspace.activeSessionId = normalizedSessionId;
   const loadRequestId = Number(state.detail.loadRequestId || 0) + 1;
   state.detail.loadRequestId = loadRequestId;
+  state.detail.replyCorrelationId = `reply-ui:${normalizedSessionId}:${loadRequestId}`;
   pushClientDebugLog("info", "Opening session detail", {
     sessionId: normalizedSessionId,
     previousSessionId,
@@ -4487,6 +4644,7 @@ function renderSessionDetail() {
         reasoningEffort: codex?.reasoningEffort,
         profile: codex?.profile,
       });
+      pushClientDebugLog("info", "Voice note transcription completed", result.transcriptionDiagnostics);
       state.detail.voiceTranscribing = false;
       syncComposerActionState();
       scheduleSessionDetailRender();
@@ -4780,8 +4938,14 @@ function attachSessionSocket(sessionId) {
   cleanupSocket();
   pushClientDebugLog("debug", "Connecting session socket", {
     sessionId: normalizedSessionId,
+    correlationId: getReplyCorrelationId(),
   });
+  state.detail.replySocketAttempt = Number(state.detail.replySocketAttempt || 0) + 1;
   const socket = connectSessionSocket(normalizedSessionId, {
+    connectionId: buildReplySocketConnectionId(
+      getReplyCorrelationId(),
+      state.detail.replySocketAttempt,
+    ),
     onLog(entry) {
       pushClientDebugLog(entry.level, entry.message, entry.details);
     },
@@ -4792,6 +4956,7 @@ function attachSessionSocket(sessionId) {
 
       pushClientDebugLog("debug", "Session socket state changed", {
         sessionId: normalizedSessionId,
+        correlationId: getReplyCorrelationId(),
         state: nextState,
       });
       state.socketState = nextState;
@@ -4811,10 +4976,12 @@ function attachSessionSocket(sessionId) {
 
       pushClientDebugLog("debug", "Session socket event received", {
         sessionId: normalizedSessionId,
+        correlationId: getReplyCorrelationId(),
         eventType: event.type || "",
         seq: Number(event.seq || 0),
         turnId: event.turnId || "",
         status: event.status || "",
+        ...summarizeReplyEvent(event),
       });
       if (state.detail.session) {
         state.detail.session.updatedAt = new Date().toISOString();
@@ -7959,22 +8126,7 @@ function matchesSessionFilters(session, project, filters) {
     return false;
   }
 
-  const keyword = filters.keyword.trim().toLowerCase();
-  if (!keyword) {
-    return true;
-  }
-
-  const haystacks = [
-    session.title,
-    session.projectId,
-    project?.name,
-    session.status,
-    session.lastAssistantContent,
-    session.lastCommand,
-    session.codexThreadId,
-  ];
-
-  return haystacks.some((value) => String(value || "").toLowerCase().includes(keyword));
+  return sessionMatchesSearch(session, project, filters.keyword);
 }
 
 function countActiveSessionFilters(filters) {

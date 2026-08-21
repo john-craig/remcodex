@@ -660,9 +660,12 @@ body {
   font-size: 0.88rem;
   font-weight: 600;
   line-height: 1.35;
-  white-space: nowrap;
+  white-space: normal;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .workspace-session-item-meta {
@@ -1370,6 +1373,11 @@ button:hover {
   transform: translateY(-1px);
 }
 
+:where(button, input, select, textarea, a):focus-visible {
+  outline: 3px solid rgba(188, 90, 48, 0.42);
+  outline-offset: 3px;
+}
+
 .primary-button,
 .secondary-button,
 .danger-button {
@@ -1431,6 +1439,11 @@ button:hover {
 
 .session-tree-row .record-title-row h3 {
   min-width: 0;
+  line-height: 1.28;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .session-tree-row .record-title-row .workspace-session-item-toggle {
@@ -1503,6 +1516,14 @@ button:hover {
 
 .session-card {
   cursor: pointer;
+}
+
+.session-open-link {
+  display: inline-block;
+  margin: 0.15rem 0.95rem 0.75rem;
+  color: var(--accent-strong);
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
 .session-toolbar {
@@ -2276,6 +2297,11 @@ button:hover {
 }
 
 .composer-starting-prompt-banner-text {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-style: inherit;
 }
 
@@ -6015,4 +6041,14 @@ button:hover {
 .task-step-item-command .assistant-command-item-inline-detail details {
   display: block;
   width: 100%;
+}
+
+/* Keep keyboard focus visible for controls with specialized focus styling. */
+.composer-meta-input:focus-visible,
+.composer-meta-select:focus-visible,
+.toolbar-select:focus-visible,
+.toolbar-env:focus-visible,
+.composer-action-fab:focus-visible {
+  outline: 3px solid rgba(188, 90, 48, 0.42);
+  outline-offset: 3px;
 }

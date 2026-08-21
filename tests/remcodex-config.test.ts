@@ -24,6 +24,7 @@ test("remcodex config loads startup profiles from TOML", () => {
       `name = "remcodex-demo"`,
       `starting_prompt = "Use RemCodex to inspect the current session."`,
       `default_directory = "/home/evak/programming/by_category/agentic/remcodex"`,
+      `agent_environment = "remcodex"`,
       "",
       "[[profiles]]",
       `name = 'remcodex-review'`,
@@ -41,6 +42,7 @@ test("remcodex config loads startup profiles from TOML", () => {
       name: "remcodex-demo",
       startingPrompt: "Use RemCodex to inspect the current session.",
       defaultDirectory: "/home/evak/programming/by_category/agentic/remcodex",
+      agentEnvironment: "remcodex",
     },
     {
       name: "remcodex-review",
@@ -65,6 +67,7 @@ test("profile manager seeds configured profiles on startup", () => {
         name: "remcodex-demo",
         startingPrompt: "Demo prompt.",
         defaultDirectory: "/home/evak/programming/by_category/agentic/remcodex",
+        agentEnvironment: "remcodex",
       },
     ],
   });
@@ -76,17 +79,20 @@ test("profile manager seeds configured profiles on startup", () => {
       name: profile.name,
       starting_prompt: profile.starting_prompt,
       default_directory: profile.default_directory,
+      agent_environment: profile.agent_environment,
     })),
     [
       {
         name: "orchestrator",
         starting_prompt: "Custom orchestrator prompt.",
         default_directory: "/home/evak/programming/custom",
+        agent_environment: null,
       },
       {
         name: "remcodex-demo",
         starting_prompt: "Demo prompt.",
         default_directory: "/home/evak/programming/by_category/agentic/remcodex",
+        agent_environment: "remcodex",
       },
     ],
   );

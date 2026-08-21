@@ -13,6 +13,8 @@ import { SessionTimelineService } from "./services/session-timeline-service";
 import { CodexRolloutSyncService } from "./services/codex-rollout-sync";
 import { normalizeCodexExecLaunchInput } from "./utils/codex-launch";
 import { buildRemCodexSessionUrl } from "./utils/remcodex-url";
+import type { RemCodexRemoteInstance } from "./utils/remcodex-remote-instances";
+import { proxyRemoteMcpCall } from "./services/remote-mcp-client";
 
 interface McpSessionEntry {
   transport: NodeStreamableHTTPServerTransport;
@@ -29,6 +31,7 @@ export interface RemCodexMcpDependencies {
 
 export interface RemCodexMcpRequestOptions {
   apiToken: string;
+  remoteInstances?: RemCodexRemoteInstance[];
 }
 
 interface JsonRpcErrorBody {
@@ -92,6 +95,7 @@ function serializeSession(
     sourceKind: session.source_kind,
     sourceRolloutPath: session.source_rollout_path,
     sourceThreadId: session.source_thread_id,
+    agentEnvironment: session.agent_environment,
     sourceRolloutHasOpenTurn: session.source_rollout_has_open_turn === 1,
     pendingApproval,
     createdAt: session.created_at,
@@ -123,6 +127,7 @@ function serializeSessionListItem(
     sourceKind: session.source_kind,
     sourceRolloutPath: session.source_rollout_path,
     sourceThreadId: session.source_thread_id,
+    agentEnvironment: session.agent_environment,
     sourceRolloutHasOpenTurn: session.source_rollout_has_open_turn === 1,
     pendingApproval,
     lastEventAt: session.last_event_at,
@@ -332,13 +337,20 @@ function registerToolserver(
           tags: z.array(z.string()).optional(),
           metadata: z.record(z.string(), z.unknown()).optional(),
           parentSessionId: z.string().min(1).optional(),
+          profile: z.string().min(1).optional(),
+          agentEnvironment: z.string().min(1).optional(),
         })
         .refine(({ projectId, workingDirectory }) => projectId || workingDirectory, {
           message: "Either projectId or workingDirectory is required.",
         }),
     },
-    async ({ projectId, workingDirectory, title, description, tags, metadata, parentSessionId }) => {
+    async ({ projectId, workingDirectory, title, description, tags, metadata, parentSessionId, profile, agentEnvironment }) => {
       try {
+        const selectedProfile = profile ? deps.profileManager.getProfile(profile) : null;
+        if (profile && !selectedProfile) {
+          return mcpErrorResult("Profile not found.");
+        }
+        const selectedEnvironment = agentEnvironment ?? selectedProfile?.agent_environment;
         const project = projectId
           ? deps.projectManager.getProject(projectId)
           : deps.projectManager.getOrCreateProjectByPath(
@@ -367,9 +379,17 @@ function registerToolserver(
                 tags,
                 metadata,
                 parentSessionId,
+                agentEnvironment: selectedEnvironment,
               })
             : reusableSession ??
-              deps.sessionManager.createSession({ projectId: project.id, title, description, tags, metadata });
+              deps.sessionManager.createSession({
+                projectId: project.id,
+                title,
+                description,
+                tags,
+                metadata,
+                agentEnvironment: selectedEnvironment,
+              });
         return mcpJsonResult(
           {
             ...serializeSession(
@@ -475,6 +495,8 @@ function registerToolserver(
             modelId: z.string().optional(),
             reasoningId: z.string().optional(),
             profile: z.string().optional(),
+            allowedTools: z.array(z.object({ server: z.string(), tool: z.string().optional() })).max(128).optional(),
+            deniedTools: z.array(z.object({ server: z.string(), tool: z.string().optional() })).max(128).optional(),
           })
           .optional(),
       }),
@@ -561,6 +583,8 @@ function registerToolserver(
             modelId: z.string().optional(),
             reasoningId: z.string().optional(),
             profile: z.string().optional(),
+            allowedTools: z.array(z.object({ server: z.string(), tool: z.string().optional() })).max(128).optional(),
+            deniedTools: z.array(z.object({ server: z.string(), tool: z.string().optional() })).max(128).optional(),
           })
           .optional(),
       }),
@@ -597,6 +621,17 @@ export async function handleRemCodexMcpRequest(
   options: RemCodexMcpRequestOptions,
 ): Promise<void> {
   if (!authorizeMcpRequest(request, response, options.apiToken)) {
+    return;
+  }
+
+  const body = request.body as { method?: unknown; params?: { arguments?: Record<string, unknown> } };
+  if (body?.method === "tools/call" && typeof body.params?.arguments?.instanceName === "string") {
+    try {
+      await proxyRemoteMcpCall(body, options.remoteInstances ?? [], response);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Remote MCP request failed.";
+      response.status(/Unknown remote instance|credential is unavailable|must not target|must use https/i.test(message) ? 400 : 502).json({ error: message });
+    }
     return;
   }
 

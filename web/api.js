@@ -32,6 +32,10 @@ export function getProfiles() {
   return request("/api/profiles");
 }
 
+export function getAgentEnvironments() {
+  return request("/api/agent-environments");
+}
+
 export function createProject(payload) {
   return request("/api/projects", {
     method: "POST",

@@ -34,7 +34,15 @@ import {
   parseRemCodexDirectoryInstances,
   type RemCodexDirectoryInstance,
 } from "./utils/remcodex-directory";
+import {
+  parseRemCodexRemoteInstances,
+  type RemCodexRemoteInstance,
+} from "./utils/remcodex-remote-instances";
 import { resolveRemCodexPublicBaseUrl } from "./utils/remcodex-url";
+import {
+  defaultAgentEnvironmentRegistryPath,
+  loadAgentEnvironmentRegistry,
+} from "./utils/agent-environment-registry";
 
 export interface RemCodexServerOptions {
   port?: number;
@@ -46,6 +54,7 @@ export interface RemCodexServerOptions {
   codexMode?: CodexExecutionMode;
   logStartup?: boolean;
   directoryInstances?: RemCodexDirectoryInstance[];
+  remoteInstances?: RemCodexRemoteInstance[];
 }
 
 function resolveMcpApiToken(): string | null {
@@ -63,6 +72,7 @@ export interface StartedRemCodexServer {
   codexMode: CodexExecutionMode;
   projectRoots: string[];
   directoryInstances: RemCodexDirectoryInstance[];
+  remoteInstances: RemCodexRemoteInstance[];
   stop: () => Promise<void>;
 }
 
@@ -78,6 +88,7 @@ interface BuiltRemCodexServer {
   projectRoots: string[];
   logStartup: boolean;
   directoryInstances: RemCodexDirectoryInstance[];
+  remoteInstances: RemCodexRemoteInstance[];
 }
 
 function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodexServer {
@@ -98,6 +109,9 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
   const directoryInstances = options.directoryInstances ?? parseRemCodexDirectoryInstances(
     process.env.REMCODEX_DIRECTORY_INSTANCES ?? "",
   );
+  const remoteInstances = options.remoteInstances ?? parseRemCodexRemoteInstances(
+    process.env.REMCODEX_REMOTE_INSTANCES ?? "",
+  );
   const publicBaseUrl = resolveRemCodexPublicBaseUrl();
 
   mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -109,6 +123,9 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
   const sessionTimeline = new SessionTimelineService(eventStore);
   const projectManager = new ProjectManager(db, projectRootsEnv, repoRoot);
   const remCodexConfig = loadRemCodexConfig(configPath);
+  const agentEnvironmentRegistry = loadAgentEnvironmentRegistry(
+    process.env.CODEX_AGENT_ENVIRONMENTS_PATH ?? defaultAgentEnvironmentRegistryPath(),
+  );
   const profileManager = new AgentProfileManager(db, {
     initialProfiles: remCodexConfig.profiles,
   });
@@ -124,6 +141,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
     projectManager,
     codexCommand,
     codexMode,
+    agentEnvironmentRegistry,
   });
   const mcpApiToken = resolveMcpApiToken();
 
@@ -147,6 +165,17 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
     });
   });
 
+  app.get("/api/agent-environments", (_request, response) => {
+    response.json({
+      defaultEnvironment: agentEnvironmentRegistry.defaultEnvironment,
+      items: Object.values(agentEnvironmentRegistry.environments).map((environment) => ({
+        name: environment.name,
+        managedPath: environment.managedPath,
+        allowedRoots: environment.allowedRoots,
+      })),
+    });
+  });
+
   app.use("/api/projects", createProjectRouter(projectManager));
   app.use("/api/profiles", createProfileRouter(profileManager));
   app.use(
@@ -157,6 +186,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
       eventStore,
       codexMode,
       codexRolloutSync,
+      agentEnvironmentRegistry,
     }),
   );
   app.use(
@@ -168,6 +198,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
       codexRolloutSync,
       appServerRegistry,
       sessionTimeline,
+      profileManager,
     ),
   );
   app.use("/api/sessions/:sessionId/messages", createMessageRouter(sessionManager, speechToText));
@@ -187,6 +218,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
           },
           {
             apiToken: mcpApiToken,
+            remoteInstances,
           },
         );
       } catch (error) {
@@ -243,6 +275,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
     codexMode,
     projectRoots: projectManager.listAllowedRoots(),
     directoryInstances,
+    remoteInstances,
     logStartup: options.logStartup ?? true,
   };
 }
@@ -277,6 +310,7 @@ export async function startRemCodexServer(
         databasePath: built.databasePath,
         codexCommand: built.codexCommand,
         directoryInstances: built.directoryInstances.length,
+        remoteInstances: built.remoteInstances.map((instance) => instance.name),
       }),
     );
   }
@@ -291,6 +325,7 @@ export async function startRemCodexServer(
     codexMode: built.codexMode,
     projectRoots: built.projectRoots,
     directoryInstances: built.directoryInstances,
+    remoteInstances: built.remoteInstances.map(({ name, url }) => ({ name, url, credentialRef: "[server-side]" })),
     stop: () =>
       new Promise<void>((resolve, reject) => {
         built.server.close((error) => {

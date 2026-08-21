@@ -301,6 +301,60 @@ registered yet, RemCodex registers it as a project before creating the session.
 Providing `parentSessionId` always creates a new child session instead of
 reusing an existing one.
 
+### Per-turn MCP tool policy
+
+REST message requests and the MCP `send-message` tool may include structured
+`codex.allowedTools` and `codex.deniedTools` arrays. Each selector is an object with a required
+`server` name and an optional `tool` name. A selector without `tool` applies to
+the whole MCP server; a selector with `tool` applies only to that tool:
+
+```json
+{
+  "codex": {
+    "allowedTools": [{ "server": "vikunja" }],
+    "deniedTools": [{ "server": "rhizomatic_server", "tool": "delete_themagraph" }]
+  }
+}
+```
+
+RemCodex validates selector names, rejects duplicates and any allow/deny
+overlap (including a server selector overlapping a tool selector), and emits
+only its internal allowlisted `mcp_servers.<server>[.tools.<tool>].enabled`
+Codex configuration keys. Raw Codex configuration objects are not accepted.
+When no policy is supplied, the existing Codex configuration is unchanged.
+
+### Named remote MCP targets
+
+MCP tool calls may target a named configured RemCodex instance by adding
+`instanceName` to the tool arguments. Configure targets with
+`REMCODEX_REMOTE_INSTANCES`; the `credentialRef` is an environment-variable
+name resolved only by the RemCodex server and is never accepted from the
+caller:
+
+```bash
+export REMCODEX_REMOTE_INSTANCES='[
+  {"name":"home","url":"https://remcodex.example","credentialRef":"REMCODEX_HOME_TOKEN"}
+]'
+export REMCODEX_HOME_TOKEN='server-side-token'
+```
+
+Targets must use HTTPS, cannot contain URL credentials, and reject loopback or
+private hosts. Unknown targets, missing credentials, and malformed
+configurations fail closed. A routed request uses only the selected target's
+credential; the caller's bearer token is not forwarded. Omitting `instanceName`
+preserves the local/default MCP behavior.
+
+### Peer capability safety defaults
+
+The peer-communication service uses separate administrator and worker
+credentials, deny-by-default named scopes, directed grants bound to source,
+target, and work-package identities, append-only audit records, and hashed
+server-issued credential tokens. Message payloads are capped at 16 KiB, reads
+at 100 messages, timelines at 100 entries, summaries at 8 KiB, and retained
+messages at 1,000 per grant. Credentials lease for 15 minutes unless a caller
+of the service supplies a shorter bound; expiry and explicit dormancy are
+audited and do not reactivate the old credential.
+
 The read-only `list-sessions-by-directory` tool returns all sessions recorded
 for a working directory, including completed and failed sessions.
 
