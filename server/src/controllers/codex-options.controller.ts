@@ -285,10 +285,21 @@ export function createCodexOptionsRouter(deps: CodexOptionsRouterDeps): Router {
     response.json(resolveCodexHosts(request));
   });
 
-  router.get("/importable-sessions", (_request, response) => {
-    response.json({
-      items: deps.codexRolloutSync.listImportableSessions(),
-    });
+  router.get("/importable-sessions", (request, response, next) => {
+    try {
+      const requestedEnvironment = typeof request.query.agentEnvironment === "string"
+        ? request.query.agentEnvironment.trim()
+        : "";
+      const environmentName = requestedEnvironment || deps.agentEnvironmentRegistry.defaultEnvironment;
+      const codexHome = environmentName
+        ? resolveAgentEnvironment(deps.agentEnvironmentRegistry, environmentName)?.codexHome
+        : null;
+      response.json({
+        items: deps.codexRolloutSync.listImportableSessions(20, codexHome),
+      });
+    } catch (error) {
+      next(error);
+    }
   });
 
   return router;

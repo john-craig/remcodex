@@ -10,6 +10,7 @@ import { EventStore } from "../server/src/services/event-store";
 import { ProjectManager } from "../server/src/services/project-manager";
 import { SessionManager } from "../server/src/services/session-manager";
 import type { AgentEnvironmentRegistry } from "../server/src/utils/agent-environment-registry";
+import { resolveCodexHomePolicy } from "../server/src/services/codex-runner";
 
 function makeProject(
   codexCommand: string,
@@ -133,4 +134,15 @@ test("launches local exec children with the session agent environment home", asy
   const error = eventStore.listAll(session.id).find((event) => event.type === "error");
   assert.ok(error);
   assert.match(String(error.payload.details?.stderr), new RegExp(`CODEX_HOME=${codexHome.replace(/[.*+?^${}()|[\\]\\]/g, "\\\\$&")}`));
+});
+
+test("keeps remote app-server homes fixed on the external server", () => {
+  assert.deepEqual(
+    resolveCodexHomePolicy("app-server", "ws://remote.example/codex", "/managed/writer"),
+    { codexHome: null, fixedByRemoteServer: true },
+  );
+  assert.deepEqual(
+    resolveCodexHomePolicy("app-server", null, "/managed/writer"),
+    { codexHome: "/managed/writer", fixedByRemoteServer: false },
+  );
 });

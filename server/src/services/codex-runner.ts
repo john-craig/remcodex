@@ -15,6 +15,24 @@ export interface CodexRunner {
   isAlive(): boolean;
 }
 
+export interface CodexHomePolicy {
+  codexHome: string | null;
+  fixedByRemoteServer: boolean;
+}
+
+/** Remote app servers own their Codex home; never apply the local session home to them. */
+export function resolveCodexHomePolicy(
+  mode: CodexExecutionMode,
+  appServerEndpoint: string | null | undefined,
+  codexHome: string | null | undefined,
+): CodexHomePolicy {
+  if (mode === "app-server" && appServerEndpoint?.trim()) {
+    return { codexHome: null, fixedByRemoteServer: true };
+  }
+
+  return { codexHome: codexHome?.trim() || null, fixedByRemoteServer: false };
+}
+
 export function createCodexRunner(
   mode: CodexExecutionMode,
   command: string,
@@ -22,12 +40,13 @@ export function createCodexRunner(
   appServerEndpoint?: string | null,
   codexHome?: string | null,
 ): CodexRunner {
+  const homePolicy = resolveCodexHomePolicy(mode, appServerEndpoint, codexHome);
   if (mode === "app-server") {
     if (appServerEndpoint) {
       return new CodexRemoteAppServerRunner(appServerEndpoint, cwd);
     }
-    return new CodexAppServerRunner(command, cwd, codexHome);
+    return new CodexAppServerRunner(command, cwd, homePolicy.codexHome);
   }
 
-  return new CodexExecRunner(command, cwd, codexHome);
+  return new CodexExecRunner(command, cwd, homePolicy.codexHome);
 }

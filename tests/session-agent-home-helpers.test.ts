@@ -6,6 +6,7 @@ import test from "node:test";
 import Database from "better-sqlite3";
 
 import { resolveCodexStatus } from "../server/src/utils/codex-status";
+import { resolveCodexQuotaSnapshot } from "../server/src/utils/codex-quota";
 
 test("status inspection reads the selected session agent environment home", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "remcodex-status-home-"));
@@ -25,4 +26,25 @@ test("status inspection reads the selected session agent environment home", () =
   assert.equal(status.source, "threadId");
   assert.equal(status.thread?.threadId, "thread-writer");
   assert.equal(status.thread?.cwd, root);
+});
+
+test("quota inspection reads rollout history from the selected agent environment home", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "remcodex-quota-home-"));
+  const sessionsRoot = path.join(root, "sessions");
+  fs.mkdirSync(sessionsRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(sessionsRoot, "writer-thread.jsonl"),
+    JSON.stringify({
+      type: "token_count",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      rate_limits: { primary: { used_percent: 25 } },
+      info: { model_context_window: 1000 },
+    }) + "\n",
+    "utf8",
+  );
+
+  const snapshot = resolveCodexQuotaSnapshot({ threadId: "writer-thread", codexHome: root });
+  assert.equal(snapshot?.source, "rollout");
+  assert.deepEqual(snapshot?.rateLimits, { primary: { used_percent: 25 } });
+  assert.equal(snapshot?.modelContextWindow, 1000);
 });
