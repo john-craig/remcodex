@@ -146,3 +146,49 @@ test("keeps remote app-server homes fixed on the external server", () => {
     { codexHome: "/managed/writer", fixedByRemoteServer: false },
   );
 });
+
+test("runs concurrent sessions with different agent environment homes", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "remcodex-concurrent-agent-home-"));
+  const command = writeLauncher(
+    root,
+    "process.stderr.write(`CODEX_HOME=${process.env.CODEX_HOME || ''}\\n`); process.exit(7);\n",
+  );
+  const writerHome = path.join(root, "writer");
+  const reviewerHome = path.join(root, "reviewer");
+  const registry: AgentEnvironmentRegistry = {
+    version: 1,
+    defaultEnvironment: "writer",
+    managedPaths: [root],
+    allowedRoots: [root],
+    environments: {
+      writer: { name: "writer", codexHome: writerHome, managedPath: root, allowedRoots: [root] },
+      reviewer: { name: "reviewer", codexHome: reviewerHome, managedPath: root, allowedRoots: [root] },
+    },
+  };
+  const db = createDatabase(":memory:");
+  runMigrations(db);
+  const projectRoot = path.join(root, "project");
+  fs.mkdirSync(projectRoot);
+  const eventStore = new EventStore(db);
+  const projectManager = new ProjectManager(db, root, process.cwd());
+  const manager = new SessionManager({
+    db,
+    eventStore,
+    projectManager,
+    codexCommand: command,
+    codexMode: "exec-json",
+    agentEnvironmentRegistry: registry,
+  });
+  const project = projectManager.createProject({ name: "Concurrent Homes", path: projectRoot });
+  const writer = manager.createSession({ projectId: project.id, agentEnvironment: "writer" });
+  const reviewer = manager.createSession({ projectId: project.id, agentEnvironment: "reviewer" });
+
+  manager.sendMessage(writer.id, "writer job");
+  manager.sendMessage(reviewer.id, "reviewer job");
+  await Promise.all([waitForFailed(manager, writer.id), waitForFailed(manager, reviewer.id)]);
+
+  const writerError = eventStore.listAll(writer.id).find((event) => event.type === "error");
+  const reviewerError = eventStore.listAll(reviewer.id).find((event) => event.type === "error");
+  assert.match(String(writerError?.payload.details?.stderr), new RegExp(`CODEX_HOME=${writerHome.replace(/[.*+?^${}()|[\\]\\]/g, "\\\\$&")}`));
+  assert.match(String(reviewerError?.payload.details?.stderr), new RegExp(`CODEX_HOME=${reviewerHome.replace(/[.*+?^${}()|[\\]\\]/g, "\\\\$&")}`));
+});
