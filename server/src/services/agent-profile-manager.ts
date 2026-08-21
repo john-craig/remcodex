@@ -9,6 +9,7 @@ export interface AgentProfileSeed {
   name: string;
   startingPrompt: string;
   defaultDirectory: string;
+  agentEnvironment?: string;
 }
 
 export const DEFAULT_ORCHESTRATOR_PROFILE = {
@@ -16,6 +17,7 @@ export const DEFAULT_ORCHESTRATOR_PROFILE = {
   starting_prompt:
     "Manage delegated Codex work by reusing an existing session in the requested directory or starting a fresh session there when none exists.",
   default_directory: `${homedir()}/programming`,
+  agent_environment: null,
 };
 
 export interface AgentProfileManagerOptions {
@@ -32,7 +34,7 @@ export class AgentProfileManager {
     return this.db
       .prepare(
         `
-          SELECT id, name, starting_prompt, default_directory, created_at, updated_at
+          SELECT id, name, starting_prompt, default_directory, agent_environment, created_at, updated_at
           FROM agent_profiles
           ORDER BY name COLLATE NOCASE
         `,
@@ -45,7 +47,7 @@ export class AgentProfileManager {
       (this.db
         .prepare(
           `
-            SELECT id, name, starting_prompt, default_directory, created_at, updated_at
+            SELECT id, name, starting_prompt, default_directory, agent_environment, created_at, updated_at
             FROM agent_profiles
             WHERE id = ? OR name = ?
           `,
@@ -58,6 +60,7 @@ export class AgentProfileManager {
     name: string;
     startingPrompt: string;
     defaultDirectory: string;
+    agentEnvironment?: string | null;
   }): AgentProfileRecord {
     return this.persistProfile(input, "create");
   }
@@ -73,12 +76,14 @@ export class AgentProfileManager {
       name: string;
       startingPrompt: string;
       defaultDirectory: string;
+      agentEnvironment?: string | null;
     },
     mode: "create" | "upsert",
   ): AgentProfileRecord {
     const name = input.name.trim();
     const startingPrompt = input.startingPrompt.trim();
     const defaultDirectory = input.defaultDirectory.trim();
+    const agentEnvironment = input.agentEnvironment?.trim() || null;
 
     if (!name || !startingPrompt || !defaultDirectory) {
       throw new AppError(400, "Profile name, starting prompt, and default directory are required.");
@@ -92,6 +97,7 @@ export class AgentProfileManager {
           name,
           starting_prompt: startingPrompt,
           default_directory: defaultDirectory,
+          agent_environment: agentEnvironment,
           updated_at: timestamp,
         }
       : {
@@ -99,6 +105,7 @@ export class AgentProfileManager {
           name,
           starting_prompt: startingPrompt,
           default_directory: defaultDirectory,
+          agent_environment: agentEnvironment,
           created_at: timestamp,
           updated_at: timestamp,
         };
@@ -113,18 +120,18 @@ export class AgentProfileManager {
           .prepare(
             `
               UPDATE agent_profiles
-              SET starting_prompt = ?, default_directory = ?, updated_at = ?
+              SET starting_prompt = ?, default_directory = ?, agent_environment = ?, updated_at = ?
               WHERE id = ?
             `,
           )
-          .run(profile.starting_prompt, profile.default_directory, profile.updated_at, profile.id);
+          .run(profile.starting_prompt, profile.default_directory, profile.agent_environment, profile.updated_at, profile.id);
       } else {
         this.db
           .prepare(
             `
               INSERT INTO agent_profiles
-                (id, name, starting_prompt, default_directory, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?)
+                (id, name, starting_prompt, default_directory, agent_environment, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?)
             `,
           )
           .run(
@@ -132,6 +139,7 @@ export class AgentProfileManager {
             profile.name,
             profile.starting_prompt,
             profile.default_directory,
+            profile.agent_environment,
             profile.created_at,
             profile.updated_at,
           );
@@ -156,6 +164,7 @@ export class AgentProfileManager {
       name: DEFAULT_ORCHESTRATOR_PROFILE.name,
       startingPrompt: DEFAULT_ORCHESTRATOR_PROFILE.starting_prompt,
       defaultDirectory: DEFAULT_ORCHESTRATOR_PROFILE.default_directory,
+      agentEnvironment: DEFAULT_ORCHESTRATOR_PROFILE.agent_environment,
     });
   }
 }

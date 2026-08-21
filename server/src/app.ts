@@ -35,6 +35,10 @@ import {
   type RemCodexDirectoryInstance,
 } from "./utils/remcodex-directory";
 import { resolveRemCodexPublicBaseUrl } from "./utils/remcodex-url";
+import {
+  defaultAgentEnvironmentRegistryPath,
+  loadAgentEnvironmentRegistry,
+} from "./utils/agent-environment-registry";
 
 export interface RemCodexServerOptions {
   port?: number;
@@ -109,6 +113,9 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
   const sessionTimeline = new SessionTimelineService(eventStore);
   const projectManager = new ProjectManager(db, projectRootsEnv, repoRoot);
   const remCodexConfig = loadRemCodexConfig(configPath);
+  const agentEnvironmentRegistry = loadAgentEnvironmentRegistry(
+    process.env.CODEX_AGENT_ENVIRONMENTS_PATH ?? defaultAgentEnvironmentRegistryPath(),
+  );
   const profileManager = new AgentProfileManager(db, {
     initialProfiles: remCodexConfig.profiles,
   });
@@ -124,6 +131,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
     projectManager,
     codexCommand,
     codexMode,
+    agentEnvironmentRegistry,
   });
   const mcpApiToken = resolveMcpApiToken();
 
@@ -144,6 +152,17 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
       projectRoots: projectManager.listAllowedRoots(),
       publicBaseUrl,
       now: new Date().toISOString(),
+    });
+  });
+
+  app.get("/api/agent-environments", (_request, response) => {
+    response.json({
+      defaultEnvironment: agentEnvironmentRegistry.defaultEnvironment,
+      items: Object.values(agentEnvironmentRegistry.environments).map((environment) => ({
+        name: environment.name,
+        managedPath: environment.managedPath,
+        allowedRoots: environment.allowedRoots,
+      })),
     });
   });
 
@@ -168,6 +187,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
       codexRolloutSync,
       appServerRegistry,
       sessionTimeline,
+      profileManager,
     ),
   );
   app.use("/api/sessions/:sessionId/messages", createMessageRouter(sessionManager, speechToText));

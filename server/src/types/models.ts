@@ -188,6 +188,7 @@ export interface AgentProfileRecord {
   name: string;
   starting_prompt: string;
   default_directory: string;
+  agent_environment: string | null;
   created_at: string;
   updated_at: string;
 }

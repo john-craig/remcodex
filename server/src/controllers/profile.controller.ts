@@ -24,11 +24,13 @@ export function createProfileRouter(profileManager: AgentProfileManager): Router
         name?: string;
         startingPrompt?: string;
         defaultDirectory?: string;
+        agentEnvironment?: string | null;
       };
       const profile = profileManager.createProfile({
         name: body.name ?? "",
         startingPrompt: body.startingPrompt ?? "",
         defaultDirectory: body.defaultDirectory ?? "",
+        agentEnvironment: body.agentEnvironment,
       });
       response.status(201).json(profile);
     } catch (error) {

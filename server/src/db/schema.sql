@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS agent_profiles (
   name TEXT NOT NULL UNIQUE,
   starting_prompt TEXT NOT NULL,
   default_directory TEXT NOT NULL,
+  agent_environment TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );

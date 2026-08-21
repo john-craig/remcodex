@@ -111,6 +111,7 @@ function finalizeProfile(
   const name = String(profile.name || "").trim();
   const startingPrompt = String(profile.startingPrompt || "").trim();
   const defaultDirectory = String(profile.defaultDirectory || "").trim();
+  const agentEnvironment = String(profile.agentEnvironment || "").trim();
   if (!name && !startingPrompt && !defaultDirectory) {
     return null;
   }
@@ -125,6 +126,7 @@ function finalizeProfile(
     name,
     startingPrompt,
     defaultDirectory,
+    ...(agentEnvironment ? { agentEnvironment } : {}),
   };
 }
 
@@ -178,6 +180,8 @@ export function loadRemCodexConfig(configPath: string): RemCodexConfig {
       currentProfile.startingPrompt = value;
     } else if (key === "default_directory") {
       currentProfile.defaultDirectory = value;
+    } else if (key === "agent_environment") {
+      currentProfile.agentEnvironment = value;
     }
   });
 

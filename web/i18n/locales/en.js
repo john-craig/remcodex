@@ -28,6 +28,8 @@ export default {
   "workspace.create.noProjects": "There are no projects yet. Pick a directory to use it directly, or create a new project folder inside it.",
   "workspace.create.chooseDirectory": "Choose directory",
   "workspace.create.startSession": "Start session",
+  "workspace.create.agentEnvironment": "Agent environment",
+  "workspace.create.agentEnvironmentLegacy": "Legacy default",
   "workspace.create.processing": "Working...",
   "workspace.create.directoryTitle": "Choose a directory to start a session",
   "workspace.create.projectName": "New project name (optional)",

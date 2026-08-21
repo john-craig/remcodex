@@ -9,6 +9,7 @@ import {
   getCodexUiOptions,
   getCodexStatus,
   getHealth,
+  getAgentEnvironments,
   getProjects,
   getProfiles,
   getSession,
@@ -1698,6 +1699,8 @@ const state = {
     newSessionProfileMenuOpen: false,
     activeSessionId: "",
     profiles: [],
+    agentEnvironments: [],
+    selectedAgentEnvironment: "",
     expandedSessionIds: readWorkspaceExpandedSessionIds(),
     collapsedSessionIds: readWorkspaceCollapsedSessionIds(),
     createDialog: {
@@ -1996,6 +1999,8 @@ function closeWorkspaceNewSessionProfileMenu(selectedSessionId = state.workspace
 
 function setWorkspaceNewSessionProfile(profileName, selectedSessionId = state.workspace.activeSessionId) {
   persistWorkspaceNewSessionProfile(profileName);
+  const profile = getWorkspaceNewSessionProfile(profileName);
+  state.workspace.selectedAgentEnvironment = String(profile?.agent_environment || "").trim();
   state.workspace.newSessionProfileMenuOpen = false;
   patchWorkspaceSidebar(selectedSessionId);
 }
@@ -2185,7 +2190,11 @@ function renderWorkspaceSessionRow(row, selectedSessionId = "", selectedSessionI
   `;
 }
 
-async function createWorkspaceSessionForProjectPath(projectPath, startingPrompt = "") {
+async function createWorkspaceSessionForProjectPath(
+  projectPath,
+  startingPrompt = "",
+  agentEnvironment = state.workspace.selectedAgentEnvironment,
+) {
   const normalizedProjectPath = normalizeProjectPathForComparison(projectPath);
   if (!normalizedProjectPath) {
     throw new Error("Profile default directory is missing.");
@@ -2221,6 +2230,7 @@ async function createWorkspaceSessionForProjectPath(projectPath, startingPrompt 
   const session = await createSession({
     projectId: project.projectId,
     startingPrompt: normalizeSessionStartingPrompt(startingPrompt || ""),
+    agentEnvironment: agentEnvironment || undefined,
   });
   return session;
 }
@@ -2249,7 +2259,11 @@ async function startWorkspaceNewSessionFromSelectedProfile(selectedSessionId = s
     state.detail.codexLaunch.profile = "";
   }
   const startingPrompt = normalizeSessionStartingPrompt(profile?.starting_prompt || "");
-  const session = await createWorkspaceSessionForProjectPath(defaultDirectory, startingPrompt);
+  const session = await createWorkspaceSessionForProjectPath(
+    defaultDirectory,
+    startingPrompt,
+    profile?.agent_environment || "",
+  );
   window.location.hash = buildSessionDetailHash(
     session.sessionId,
     state.detail.filter,
@@ -2355,6 +2369,13 @@ function renderWorkspaceCreateSessionDialog() {
   const projects = Array.isArray(state.sessions.projects) ? state.sessions.projects : [];
   const selectedProject =
     projects.find((project) => project.projectId === dialogState.selectedProjectId) || projects[0] || null;
+  const agentEnvironmentOptions = [
+    { name: "", label: t("workspace.create.agentEnvironmentLegacy") },
+    ...(Array.isArray(state.workspace.agentEnvironments) ? state.workspace.agentEnvironments : []).map((item) => ({
+      name: String(item?.name || ""),
+      label: String(item?.name || ""),
+    })),
+  ];
 
   if (dialogState.mode === "pick-project") {
     return `
@@ -2393,6 +2414,17 @@ function renderWorkspaceCreateSessionDialog() {
                 </div>
               `
           }
+          <label class="workspace-dialog-field">
+            <span>${escapeHtml(t("workspace.create.agentEnvironment"))}</span>
+            <select id="workspace-agent-environment" class="workspace-dialog-input">
+              ${agentEnvironmentOptions
+                .map(
+                  (item) =>
+                    `<option value="${escapeHtml(item.name)}" ${state.workspace.selectedAgentEnvironment === item.name ? "selected" : ""}>${escapeHtml(item.label)}</option>`,
+                )
+                .join("")}
+            </select>
+          </label>
         </div>
         <div class="workspace-dialog-foot workspace-dialog-foot-split">
           <div class="workspace-dialog-secondary-actions">
@@ -2440,6 +2472,17 @@ function renderWorkspaceCreateSessionDialog() {
         <div class="workspace-dialog-help">
           ${escapeHtml(t("workspace.create.projectHelp"))}
         </div>
+        <label class="workspace-dialog-field">
+          <span>${escapeHtml(t("workspace.create.agentEnvironment"))}</span>
+          <select id="workspace-agent-environment" class="workspace-dialog-input">
+            ${agentEnvironmentOptions
+              .map(
+                (item) =>
+                  `<option value="${escapeHtml(item.name)}" ${state.workspace.selectedAgentEnvironment === item.name ? "selected" : ""}>${escapeHtml(item.label)}</option>`,
+              )
+              .join("")}
+          </select>
+        </label>
         <div class="workspace-dialog-field">
           <span>${escapeHtml(t("workspace.create.currentDirectory"))}</span>
           <div class="workspace-directory-browser">
@@ -2819,7 +2862,10 @@ async function submitWorkspaceCreateSession() {
   patchWorkspaceModalSlot();
 
   try {
-    const session = await createSession({ projectId });
+    const session = await createSession({
+      projectId,
+      agentEnvironment: state.workspace.selectedAgentEnvironment || undefined,
+    });
     closeWorkspaceCreateDialog();
     window.location.hash = buildSessionDetailHash(
       session.sessionId,
@@ -2860,7 +2906,10 @@ async function submitWorkspaceProjectDialog() {
         path: targetPath,
         createMissing: createInSelectedDirectory,
       }));
-    const session = await createSession({ projectId: project.projectId });
+    const session = await createSession({
+      projectId: project.projectId,
+      agentEnvironment: state.workspace.selectedAgentEnvironment || undefined,
+    });
     closeWorkspaceCreateDialog();
     window.location.hash = buildSessionDetailHash(
       session.sessionId,
@@ -3122,6 +3171,13 @@ function bindWorkspaceCreateDialogControls() {
     };
   });
 
+  const agentEnvironmentSelect = document.querySelector("#workspace-agent-environment");
+  if (agentEnvironmentSelect instanceof HTMLSelectElement) {
+    agentEnvironmentSelect.onchange = () => {
+      state.workspace.selectedAgentEnvironment = agentEnvironmentSelect.value;
+    };
+  }
+
   const submitSessionButton = document.querySelector("#workspace-create-session-submit");
   if (submitSessionButton instanceof HTMLButtonElement) {
     submitSessionButton.onclick = async () => {
@@ -3343,9 +3399,16 @@ async function renderWorkspacePage(routeSessionId) {
   bindWorkspaceImportDialogControls();
 
   try {
-    const [sessions, projects] = await Promise.all([getSessions(), getProjects()]);
+    const [sessions, projects, agentEnvironmentResult] = await Promise.all([
+      getSessions(),
+      getProjects(),
+      getAgentEnvironments().catch(() => ({ items: [] })),
+    ]);
     state.sessions.items = sessions.items;
     state.sessions.projects = projects.items;
+    state.workspace.agentEnvironments = Array.isArray(agentEnvironmentResult?.items)
+      ? agentEnvironmentResult.items
+      : [];
 
     const selectedSessionId = resolveWorkspaceSessionId(routeSessionId);
     state.workspace.activeSessionId = selectedSessionId;

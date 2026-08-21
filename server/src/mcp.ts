@@ -92,6 +92,7 @@ function serializeSession(
     sourceKind: session.source_kind,
     sourceRolloutPath: session.source_rollout_path,
     sourceThreadId: session.source_thread_id,
+    agentEnvironment: session.agent_environment,
     sourceRolloutHasOpenTurn: session.source_rollout_has_open_turn === 1,
     pendingApproval,
     createdAt: session.created_at,
@@ -123,6 +124,7 @@ function serializeSessionListItem(
     sourceKind: session.source_kind,
     sourceRolloutPath: session.source_rollout_path,
     sourceThreadId: session.source_thread_id,
+    agentEnvironment: session.agent_environment,
     sourceRolloutHasOpenTurn: session.source_rollout_has_open_turn === 1,
     pendingApproval,
     lastEventAt: session.last_event_at,
@@ -332,13 +334,20 @@ function registerToolserver(
           tags: z.array(z.string()).optional(),
           metadata: z.record(z.string(), z.unknown()).optional(),
           parentSessionId: z.string().min(1).optional(),
+          profile: z.string().min(1).optional(),
+          agentEnvironment: z.string().min(1).optional(),
         })
         .refine(({ projectId, workingDirectory }) => projectId || workingDirectory, {
           message: "Either projectId or workingDirectory is required.",
         }),
     },
-    async ({ projectId, workingDirectory, title, description, tags, metadata, parentSessionId }) => {
+    async ({ projectId, workingDirectory, title, description, tags, metadata, parentSessionId, profile, agentEnvironment }) => {
       try {
+        const selectedProfile = profile ? deps.profileManager.getProfile(profile) : null;
+        if (profile && !selectedProfile) {
+          return mcpErrorResult("Profile not found.");
+        }
+        const selectedEnvironment = agentEnvironment ?? selectedProfile?.agent_environment;
         const project = projectId
           ? deps.projectManager.getProject(projectId)
           : deps.projectManager.getOrCreateProjectByPath(
@@ -367,9 +376,17 @@ function registerToolserver(
                 tags,
                 metadata,
                 parentSessionId,
+                agentEnvironment: selectedEnvironment,
               })
             : reusableSession ??
-              deps.sessionManager.createSession({ projectId: project.id, title, description, tags, metadata });
+              deps.sessionManager.createSession({
+                projectId: project.id,
+                title,
+                description,
+                tags,
+                metadata,
+                agentEnvironment: selectedEnvironment,
+              });
         return mcpJsonResult(
           {
             ...serializeSession(
