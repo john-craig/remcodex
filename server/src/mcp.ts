@@ -492,6 +492,8 @@ function registerToolserver(
             modelId: z.string().optional(),
             reasoningId: z.string().optional(),
             profile: z.string().optional(),
+            allowedTools: z.array(z.object({ server: z.string(), tool: z.string().optional() })).max(128).optional(),
+            deniedTools: z.array(z.object({ server: z.string(), tool: z.string().optional() })).max(128).optional(),
           })
           .optional(),
       }),
@@ -578,6 +580,8 @@ function registerToolserver(
             modelId: z.string().optional(),
             reasoningId: z.string().optional(),
             profile: z.string().optional(),
+            allowedTools: z.array(z.object({ server: z.string(), tool: z.string().optional() })).max(128).optional(),
+            deniedTools: z.array(z.object({ server: z.string(), tool: z.string().optional() })).max(128).optional(),
           })
           .optional(),
       }),

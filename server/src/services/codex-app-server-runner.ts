@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { CodexExecLaunchInput } from "../types/codex-launch";
 import type { CodexRunner } from "./codex-runner";
+import { buildCodexMcpToolPolicyOverrides } from "../utils/codex-launch";
 
 interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -230,6 +231,12 @@ export class CodexAppServerRunner implements CodexRunner {
         config[`features.${name}`] = false;
       }
     }
+
+    Object.assign(config, buildCodexMcpToolPolicyOverrides(
+      launch?.allowedTools || launch?.deniedTools
+        ? { allowedTools: launch.allowedTools, deniedTools: launch.deniedTools }
+        : undefined,
+    ));
 
     return Object.keys(config).length > 0 ? config : null;
   }

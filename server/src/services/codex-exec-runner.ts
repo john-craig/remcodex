@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 import type { CodexExecLaunchInput } from "../types/codex-launch";
 import type { CodexRunner } from "./codex-runner";
+import { buildCodexMcpToolPolicyOverrides } from "../utils/codex-launch";
 
 export interface CodexJsonEvent {
   type: string;
@@ -156,6 +157,14 @@ export class CodexExecRunner implements CodexRunner {
 
     for (const name of launch?.disableFeatures ?? []) {
       mid.push("--disable", name);
+    }
+
+    for (const [key, value] of Object.entries(buildCodexMcpToolPolicyOverrides(
+      launch?.allowedTools || launch?.deniedTools
+        ? { allowedTools: launch.allowedTools, deniedTools: launch.deniedTools }
+        : undefined,
+    ))) {
+      mid.push("-c", `${key}=${value}`);
     }
 
     if (threadId) {

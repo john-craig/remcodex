@@ -301,6 +301,28 @@ registered yet, RemCodex registers it as a project before creating the session.
 Providing `parentSessionId` always creates a new child session instead of
 reusing an existing one.
 
+### Per-turn MCP tool policy
+
+REST message requests and the MCP `send-message` tool may include structured
+`codex.allowedTools` and `codex.deniedTools` arrays. Each selector is an object with a required
+`server` name and an optional `tool` name. A selector without `tool` applies to
+the whole MCP server; a selector with `tool` applies only to that tool:
+
+```json
+{
+  "codex": {
+    "allowedTools": [{ "server": "vikunja" }],
+    "deniedTools": [{ "server": "rhizomatic_server", "tool": "delete_themagraph" }]
+  }
+}
+```
+
+RemCodex validates selector names, rejects duplicates and any allow/deny
+overlap (including a server selector overlapping a tool selector), and emits
+only its internal allowlisted `mcp_servers.<server>[.tools.<tool>].enabled`
+Codex configuration keys. Raw Codex configuration objects are not accepted.
+When no policy is supplied, the existing Codex configuration is unchanged.
+
 The read-only `list-sessions-by-directory` tool returns all sessions recorded
 for a working directory, including completed and failed sessions.
 
