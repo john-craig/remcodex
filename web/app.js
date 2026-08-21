@@ -4643,6 +4643,7 @@ function renderSessionDetail() {
         reasoningEffort: codex?.reasoningEffort,
         profile: codex?.profile,
       });
+      pushClientDebugLog("info", "Voice note transcription completed", result.transcriptionDiagnostics);
       state.detail.voiceTranscribing = false;
       syncComposerActionState();
       scheduleSessionDetailRender();

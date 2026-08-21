@@ -26,6 +26,23 @@ export interface SpeechToTextSelfTestResult {
   details: string;
 }
 
+export interface SpeechToTextDiagnostics {
+  inputBytes: number;
+  mimeType: string | null;
+  audioSuffix: string;
+  binaryName: string;
+  modelConfigured: boolean;
+  transcriptLength: number;
+  dotCount: number;
+  dotRatio: number;
+  whitespaceOnly: boolean;
+}
+
+export interface SpeechToTextResult {
+  transcript: string;
+  diagnostics: SpeechToTextDiagnostics;
+}
+
 const DEFAULT_BINARY_CANDIDATES = [
   "whisper",
   "whisper.cpp",
@@ -63,6 +80,14 @@ export class SpeechToTextService {
   }
 
   transcribe(audioBytes: Buffer, mimeType?: string | null, filename?: string | null): string {
+    return this.transcribeDetailed(audioBytes, mimeType, filename).transcript;
+  }
+
+  transcribeDetailed(
+    audioBytes: Buffer,
+    mimeType?: string | null,
+    filename?: string | null,
+  ): SpeechToTextResult {
     if (!this.binaryPath) {
       throw new Error("No speech-to-text backend is available. Install a whisper CLI to enable voice notes.");
     }
@@ -104,7 +129,21 @@ export class SpeechToTextService {
       if (!transcript) {
         throw new Error("Transcription produced an empty result.");
       }
-      return transcript;
+      const dotCount = [...transcript].filter((character) => character === ".").length;
+      return {
+        transcript,
+        diagnostics: {
+          inputBytes: audioBytes.length,
+          mimeType: String(mimeType || "").trim() || null,
+          audioSuffix: suffix,
+          binaryName: path.basename(this.binaryPath),
+          modelConfigured: Boolean(this.modelPath),
+          transcriptLength: transcript.length,
+          dotCount,
+          dotRatio: transcript.length > 0 ? dotCount / transcript.length : 0,
+          whitespaceOnly: transcript.trim().length === 0,
+        },
+      };
     } finally {
       rmSync(tmpRoot, { recursive: true, force: true });
     }

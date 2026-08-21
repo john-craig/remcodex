@@ -33,16 +33,17 @@ export function createMessageRouter(
           reasoningEffort: request.header("x-codex-reasoning") ?? undefined,
           profile: request.header("x-codex-profile") ?? undefined,
         });
-        const transcript = speechToText.transcribe(
+        const transcription = speechToText.transcribeDetailed(
           request.body,
           request.header("content-type"),
           request.header("x-filename"),
         );
-        const result = sessionManager.sendMessage(params.sessionId, transcript, launch);
+        const result = sessionManager.sendMessage(params.sessionId, transcription.transcript, launch);
 
         response.json({
           ...result,
-          transcript,
+          transcript: transcription.transcript,
+          transcriptionDiagnostics: transcription.diagnostics,
         });
       } catch (error) {
         next(error);
