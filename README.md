@@ -344,6 +344,17 @@ configurations fail closed. A routed request uses only the selected target's
 credential; the caller's bearer token is not forwarded. Omitting `instanceName`
 preserves the local/default MCP behavior.
 
+### Peer capability safety defaults
+
+The peer-communication service uses separate administrator and worker
+credentials, deny-by-default named scopes, directed grants bound to source,
+target, and work-package identities, append-only audit records, and hashed
+server-issued credential tokens. Message payloads are capped at 16 KiB, reads
+at 100 messages, timelines at 100 entries, summaries at 8 KiB, and retained
+messages at 1,000 per grant. Credentials lease for 15 minutes unless a caller
+of the service supplies a shorter bound; expiry and explicit dormancy are
+audited and do not reactivate the old credential.
+
 The read-only `list-sessions-by-directory` tool returns all sessions recorded
 for a working directory, including completed and failed sessions.
 
