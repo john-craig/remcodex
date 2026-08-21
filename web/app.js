@@ -59,6 +59,7 @@ import {
 } from "./session-timeline-reducer.js";
 import { renderTimeline, renderTimelineList } from "./session-timeline-renderer.js";
 import { connectSessionSocket } from "./session-ws.js";
+import { sessionMatchesSearch } from "./utils/session-search.js";
 import {
   buildReplySocketConnectionId,
   classifyReplyEvent,
@@ -8125,22 +8126,7 @@ function matchesSessionFilters(session, project, filters) {
     return false;
   }
 
-  const keyword = filters.keyword.trim().toLowerCase();
-  if (!keyword) {
-    return true;
-  }
-
-  const haystacks = [
-    session.title,
-    session.projectId,
-    project?.name,
-    session.status,
-    session.lastAssistantContent,
-    session.lastCommand,
-    session.codexThreadId,
-  ];
-
-  return haystacks.some((value) => String(value || "").toLowerCase().includes(keyword));
+  return sessionMatchesSearch(session, project, filters.keyword);
 }
 
 function countActiveSessionFilters(filters) {
