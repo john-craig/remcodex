@@ -200,6 +200,7 @@ export interface SessionRecord {
   pid: number | null;
   codex_thread_id: string | null;
   parent_session_id: string | null;
+  agent_environment: string | null;
   starting_prompt: string;
   description: string | null;
   tags: string[];

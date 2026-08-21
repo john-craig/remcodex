@@ -8,6 +8,11 @@ import {
   loadAgentEnvironmentRegistry,
   resolveAgentEnvironment,
 } from "../server/src/utils/agent-environment-registry";
+import { createDatabase } from "../server/src/db/client";
+import { runMigrations } from "../server/src/db/migrations";
+import { EventStore } from "../server/src/services/event-store";
+import { ProjectManager } from "../server/src/services/project-manager";
+import { SessionManager } from "../server/src/services/session-manager";
 
 function writeRegistry(value: unknown): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "remcodex-agent-registry-"));
@@ -80,4 +85,38 @@ test("rejects malformed versions, unknown defaults, traversal, and caller paths"
   const registry = loadAgentEnvironmentRegistry(writeRegistry(validRegistry()));
   assert.throws(() => resolveAgentEnvironment(registry, "/tmp/codex-home"), /registered name/);
   assert.throws(() => resolveAgentEnvironment(registry, "unknown"), /is not registered/);
+});
+
+test("persists an immutable named selection and inherits it for child sessions", () => {
+  const db = createDatabase(":memory:");
+  runMigrations(db);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "remcodex-agent-session-"));
+  const projectPath = path.join(root, "project");
+  fs.mkdirSync(projectPath);
+  const projectManager = new ProjectManager(db, root, process.cwd());
+  const registry = loadAgentEnvironmentRegistry(writeRegistry(validRegistry()));
+  const sessionManager = new SessionManager({
+    db,
+    eventStore: new EventStore(db),
+    projectManager,
+    codexCommand: "codex",
+    codexMode: "app-server",
+    agentEnvironmentRegistry: registry,
+  });
+  const project = projectManager.createProject({ name: "Environment Project", path: projectPath });
+
+  const parent = sessionManager.createSession({
+    projectId: project.id,
+    agentEnvironment: "writer",
+  });
+  const child = sessionManager.createSession({
+    projectId: project.id,
+    parentSessionId: parent.id,
+  });
+
+  assert.equal(parent.agent_environment, "writer");
+  assert.equal(child.agent_environment, "writer");
+  registry.defaultEnvironment = null;
+  assert.equal(sessionManager.getSession(parent.id)?.agent_environment, "writer");
+  assert.equal(sessionManager.getSession(child.id)?.agent_environment, "writer");
 });

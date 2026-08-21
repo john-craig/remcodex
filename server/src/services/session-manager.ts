@@ -22,6 +22,10 @@ import { AppError } from "../utils/errors";
 import { createId } from "../utils/ids";
 import { appendCappedText } from "../utils/output-limits";
 import {
+  resolveAgentEnvironment,
+  type AgentEnvironmentRegistry,
+} from "../utils/agent-environment-registry";
+import {
   composeMessageContentWithStartingPrompt,
   normalizeSessionStartingPrompt,
 } from "../utils/session-starting-prompt";
@@ -110,7 +114,16 @@ interface SessionManagerOptions {
   projectManager: ProjectManager;
   codexCommand: string;
   codexMode: CodexExecutionMode;
+  agentEnvironmentRegistry?: AgentEnvironmentRegistry;
 }
+
+const EMPTY_AGENT_ENVIRONMENT_REGISTRY: AgentEnvironmentRegistry = {
+  version: 1,
+  defaultEnvironment: null,
+  managedPaths: [],
+  allowedRoots: [],
+  environments: {},
+};
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -232,6 +245,7 @@ export class SessionManager {
             s.pid,
             s.codex_thread_id,
             s.parent_session_id,
+            s.agent_environment,
             s.starting_prompt,
             s.description,
             s.tags_json,
@@ -348,6 +362,7 @@ export class SessionManager {
               pid,
               codex_thread_id,
               parent_session_id,
+              agent_environment,
               starting_prompt,
               description,
               tags_json,
@@ -467,6 +482,7 @@ export class SessionManager {
     tags?: string[];
     metadata?: Record<string, unknown>;
     parentSessionId?: string | null;
+    agentEnvironment?: string | null;
   }): SessionRecord {
     const project = this.options.projectManager.getProject(input.projectId);
     if (!project) {
@@ -484,6 +500,18 @@ export class SessionManager {
       throw new AppError(400, "Parent session directory must be an ancestor of the child session directory.");
     }
 
+    const requestedAgentEnvironment =
+      input.agentEnvironment?.trim() || parentSession?.agent_environment || null;
+    let agentEnvironment: string | null = null;
+    try {
+      agentEnvironment = resolveAgentEnvironment(
+        this.options.agentEnvironmentRegistry ?? EMPTY_AGENT_ENVIRONMENT_REGISTRY,
+        requestedAgentEnvironment,
+      )?.name ?? null;
+    } catch (error) {
+      throw new AppError(400, error instanceof Error ? error.message : String(error));
+    }
+
     const timestamp = nowIso();
     const session: SessionRecord = {
       id: createId("sess"),
@@ -493,6 +521,7 @@ export class SessionManager {
       pid: null,
       codex_thread_id: null,
       parent_session_id: parentSession?.id ?? null,
+      agent_environment: agentEnvironment,
       starting_prompt: normalizeSessionStartingPrompt(input.startingPrompt),
       description: input.description?.trim() || null,
       tags: normalizeSessionTags(input.tags),
@@ -521,6 +550,7 @@ export class SessionManager {
             pid,
             codex_thread_id,
             parent_session_id,
+            agent_environment,
             starting_prompt,
             description,
             tags_json,
@@ -537,7 +567,7 @@ export class SessionManager {
             created_at,
             updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -548,6 +578,7 @@ export class SessionManager {
         session.pid,
         session.codex_thread_id,
         session.parent_session_id,
+        session.agent_environment,
         session.starting_prompt,
         session.description,
         JSON.stringify(session.tags),

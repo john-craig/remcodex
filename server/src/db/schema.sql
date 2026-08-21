@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   pid INTEGER,
   codex_thread_id TEXT,
   parent_session_id TEXT,
+  agent_environment TEXT,
   starting_prompt TEXT NOT NULL DEFAULT '',
   description TEXT,
   tags_json TEXT NOT NULL DEFAULT '[]',
