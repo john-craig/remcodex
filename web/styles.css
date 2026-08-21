@@ -660,9 +660,12 @@ body {
   font-size: 0.88rem;
   font-weight: 600;
   line-height: 1.35;
-  white-space: nowrap;
+  white-space: normal;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .workspace-session-item-meta {
@@ -1431,6 +1434,11 @@ button:hover {
 
 .session-tree-row .record-title-row h3 {
   min-width: 0;
+  line-height: 1.28;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .session-tree-row .record-title-row .workspace-session-item-toggle {
