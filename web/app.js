@@ -4234,7 +4234,7 @@ async function renderSessionDetailPage(sessionId) {
         }
       })
       .catch(() => null);
-    scheduleImportedSessionSync(normalizedSessionId);
+    scheduleImportedSessionSync(normalizedSessionId, 0);
   } catch (error) {
     pushClientDebugLog("error", "Failed to load session detail", {
       sessionId: normalizedSessionId,
