@@ -16,6 +16,7 @@ import { buildRemCodexSessionUrl } from "./utils/remcodex-url";
 import type { RemCodexRemoteInstance } from "./utils/remcodex-remote-instances";
 import { proxyRemoteMcpCall } from "./services/remote-mcp-client";
 import type { PeerCommunicationService } from "./services/peer-communication";
+import { readPackageVersion } from "./utils/version";
 
 interface McpSessionEntry {
   transport: NodeStreamableHTTPServerTransport;
@@ -741,7 +742,7 @@ function registerToolserver(
 function buildMcpServer(deps: RemCodexMcpDependencies) {
   const server = new McpServer({
     name: "remcodex",
-    version: "0.1.0-beta.12",
+    version: readPackageVersion(),
   });
 
   registerToolserver(server, deps);

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { accessSync, constants, existsSync, readFileSync } from "node:fs";
+import { accessSync, constants, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { homedir, networkInterfaces } from "node:os";
 import path from "node:path";
@@ -10,6 +10,7 @@ import { SpeechToTextService } from "./services/speech-to-text";
 import { resolveDefaultDatabasePath, resolvePackageRoot } from "./utils/runtime-paths";
 import { resolveExecutable } from "./utils/command";
 import { resolveRemCodexPublicBaseUrl } from "./utils/remcodex-url";
+import { readPackageVersion } from "./utils/version";
 
 interface CliFlags {
   port?: number;
@@ -23,18 +24,6 @@ function print(message = "") {
 
 function printError(message = "") {
   process.stderr.write(`${message}\n`);
-}
-
-function readPackageVersion(): string {
-  try {
-    const packageRoot = resolvePackageRoot();
-    const packageJson = JSON.parse(
-      readFileSync(path.join(packageRoot, "package.json"), "utf8"),
-    ) as { version?: unknown };
-    return typeof packageJson.version === "string" ? packageJson.version : "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
 }
 
 function isExecutableFile(filePath: string): boolean {
