@@ -84,3 +84,75 @@ test("REST and MCP expose scoped peer operations without widening worker authori
     else process.env.CODEX_AGENT_ENVIRONMENTS_PATH = previousRegistryPath;
   }
 });
+
+test("session launch passes only the scoped worker credential to an isolated child", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "remcodex-peer-isolated-launch-"));
+  const previousAdminToken = process.env.REMCODEX_PEER_ADMIN_TOKEN;
+  const previousRegistryPath = process.env.CODEX_AGENT_ENVIRONMENTS_PATH;
+  const previousObservedPath = process.env.REMCODEX_TEST_OBSERVED;
+  const scriptPath = path.join(root, "fake-codex.sh");
+  const observedPath = path.join(root, "observed.txt");
+  fs.writeFileSync(scriptPath, [
+    "#!/bin/sh",
+    'if [ -n "$REMCODEX_PEER_TOKEN" ]; then printf "worker-present\\n" >> "$REMCODEX_TEST_OBSERVED"; else printf "worker-absent\\n" >> "$REMCODEX_TEST_OBSERVED"; fi',
+    'if [ -n "$REMCODEX_PEER_ADMIN_TOKEN" ]; then printf "admin-present\\n" >> "$REMCODEX_TEST_OBSERVED"; else printf "admin-absent\\n" >> "$REMCODEX_TEST_OBSERVED"; fi',
+    'printf \'{"type":"thread.started","thread_id":"isolated-test"}\\n\'',
+  ].join("\n"), "utf8");
+  fs.chmodSync(scriptPath, 0o755);
+  process.env.REMCODEX_PEER_ADMIN_TOKEN = "peer-admin-isolated-test";
+  process.env.CODEX_AGENT_ENVIRONMENTS_PATH = writeRegistry(root);
+  process.env.REMCODEX_TEST_OBSERVED = observedPath;
+  const server = await startRemCodexServer({
+    port: 0,
+    databasePath: path.join(root, "remcodex.sqlite"),
+    configPath: path.join(root, "missing.toml"),
+    projectRootsEnv: root,
+    codexCommand: scriptPath,
+    codexMode: "exec-json",
+    logStartup: false,
+  });
+
+  try {
+    const address = server.server.address();
+    assert.ok(address && typeof address === "object");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const projectResponse = await fetch(`${baseUrl}/api/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "isolated", path: root }),
+    });
+    assert.equal(projectResponse.status, 201);
+    const project = await json(projectResponse);
+    const sessionResponse = await fetch(`${baseUrl}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectId: project.projectId, title: "isolated launch" }),
+    });
+    assert.equal(sessionResponse.status, 201);
+    const session = await json(sessionResponse);
+    const messageResponse = await fetch(`${baseUrl}/api/sessions/${session.sessionId}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "run isolated test" }),
+    });
+    assert.equal(messageResponse.status, 200);
+
+    for (let attempt = 0; attempt < 40 && !fs.existsSync(observedPath); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.deepEqual(fs.readFileSync(observedPath, "utf8").trim().split("\n"), ["worker-present", "admin-absent"]);
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const current = await json(await fetch(`${baseUrl}/api/sessions/${session.sessionId}`));
+      if (["waiting_input", "failed", "idle"].includes(current.status)) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  } finally {
+    await server.stop();
+    if (previousAdminToken === undefined) delete process.env.REMCODEX_PEER_ADMIN_TOKEN;
+    else process.env.REMCODEX_PEER_ADMIN_TOKEN = previousAdminToken;
+    if (previousRegistryPath === undefined) delete process.env.CODEX_AGENT_ENVIRONMENTS_PATH;
+    else process.env.CODEX_AGENT_ENVIRONMENTS_PATH = previousRegistryPath;
+    if (previousObservedPath === undefined) delete process.env.REMCODEX_TEST_OBSERVED;
+    else process.env.REMCODEX_TEST_OBSERVED = previousObservedPath;
+  }
+});

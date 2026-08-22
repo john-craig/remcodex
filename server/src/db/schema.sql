@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS peer_credentials (
   scopes_json TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active',
   lease_expires_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   dormant_at TEXT
 );

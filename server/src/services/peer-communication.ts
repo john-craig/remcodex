@@ -21,6 +21,7 @@ export const PEER_LIMITS = Object.freeze({
   maxStoredMessagesPerGrant: 1_000,
   maxSummaryBytes: 8 * 1024,
   leaseMs: 15 * 60 * 1_000,
+  disconnectTimeoutMs: 2 * 60 * 1_000,
 });
 
 type StoredCredential = {
@@ -30,6 +31,7 @@ type StoredCredential = {
   scopes_json: string;
   status: "active" | "dormant";
   lease_expires_at: string;
+  last_seen_at: string;
 };
 
 type Actor = StoredCredential & { scopes: Set<string> };
@@ -66,6 +68,8 @@ function jsonBytes(value: unknown): number {
 }
 
 export class PeerCommunicationService {
+  private lifecycleTimer: NodeJS.Timeout | null = null;
+
   constructor(
     private readonly db: DatabaseClient,
     private readonly clock: () => Date = () => new Date(),
@@ -73,10 +77,11 @@ export class PeerCommunicationService {
   ) {
     if (adminToken?.trim()) {
       const token = adminToken.trim();
-      this.db.prepare(`INSERT OR IGNORE INTO peer_credentials (id, worker_id, session_id, token_hash, scopes_json, lease_expires_at) VALUES ('peer-admin', 'administrator', 'server', ?, ?, ?)`).run(
+      this.db.prepare(`INSERT OR IGNORE INTO peer_credentials (id, worker_id, session_id, token_hash, scopes_json, lease_expires_at, last_seen_at) VALUES ('peer-admin', 'administrator', 'server', ?, ?, ?, ?)`).run(
         hashToken(token),
         JSON.stringify([PEER_SCOPES.adminGrant, PEER_SCOPES.adminRevoke, PEER_SCOPES.adminAudit]),
         new Date(this.clock().getTime() + 365 * 24 * 60 * 60 * 1_000).toISOString(),
+        this.clock().toISOString(),
       );
     }
   }
@@ -95,8 +100,8 @@ export class PeerCommunicationService {
     const token = `peer_${crypto.randomBytes(32).toString("base64url")}`;
     const credentialId = id("cred");
     const expires = new Date(this.clock().getTime() + (input.leaseMs ?? PEER_LIMITS.leaseMs)).toISOString();
-    this.db.prepare(`INSERT INTO peer_credentials (id, worker_id, session_id, token_hash, scopes_json, lease_expires_at) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(credentialId, input.workerId, input.sessionId, hashToken(token), JSON.stringify(scopes), expires);
+    this.db.prepare(`INSERT INTO peer_credentials (id, worker_id, session_id, token_hash, scopes_json, lease_expires_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(credentialId, input.workerId, input.sessionId, hashToken(token), JSON.stringify(scopes), expires, this.clock().toISOString());
     this.audit("credential.issued", input.workerId, credentialId, { scopes, sessionId: input.sessionId });
     return { credentialId, token };
   }
@@ -118,7 +123,29 @@ export class PeerCommunicationService {
       this.audit("credential.dormant", row.worker_id, row.id, { reason: "lease_expired" });
       throw new AppError(403, "Peer credential is inactive or expired.");
     }
+    this.db.prepare(`UPDATE peer_credentials SET last_seen_at = ? WHERE id = ? AND status = 'active'`).run(this.clock().toISOString(), row.id);
     return { ...row, scopes: new Set(JSON.parse(row.scopes_json) as string[]) };
+  }
+
+  sweepDisconnectedCredentials(): number {
+    const cutoff = this.clock().getTime() - PEER_LIMITS.disconnectTimeoutMs;
+    const rows = this.db.prepare(`SELECT id, session_id FROM peer_credentials WHERE status = 'active' AND session_id != 'server' AND (last_seen_at = '' OR last_seen_at < ? OR lease_expires_at <= ?)`).all(new Date(cutoff).toISOString(), this.clock().toISOString()) as Array<{ id: string; session_id: string }>;
+    for (const row of rows) this.dormantSession(row.session_id, "disconnect_timeout_or_lease_expiry");
+    return rows.length;
+  }
+
+  startLifecycleMonitor(intervalMs = 30_000): void {
+    if (this.lifecycleTimer) return;
+    this.lifecycleTimer = setInterval(() => {
+      this.sweepDisconnectedCredentials();
+    }, intervalMs);
+    this.lifecycleTimer.unref();
+  }
+
+  stopLifecycleMonitor(): void {
+    if (!this.lifecycleTimer) return;
+    clearInterval(this.lifecycleTimer);
+    this.lifecycleTimer = null;
   }
 
   grant(actor: Actor, input: { sourceWorkerId: string; targetWorkerId: string; workPackageId: string; scope: PeerScope }): { grantId: string } {

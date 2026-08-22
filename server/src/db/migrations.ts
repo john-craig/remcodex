@@ -75,6 +75,7 @@ export function runMigrations(db: DatabaseClient): void {
   ensureColumn(db, "sessions", "app_server_id", "TEXT");
   ensureColumn(db, "sessions", "app_server_endpoint", "TEXT");
   ensureColumn(db, "sessions", "app_server_pid", "INTEGER");
+  ensureColumn(db, "peer_credentials", "last_seen_at", "TEXT NOT NULL DEFAULT ''");
 
   // Older imports mapped external open turns to status=running; that is not local runner state.
   db.exec(

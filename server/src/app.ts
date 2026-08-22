@@ -82,6 +82,7 @@ interface BuiltRemCodexServer {
   app: express.Express;
   server: http.Server;
   closeDatabase: () => void;
+  stopPeerLifecycle: () => void;
   port: number;
   repoRoot: string;
   databasePath: string;
@@ -127,6 +128,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
     undefined,
     process.env.REMCODEX_PEER_ADMIN_TOKEN,
   );
+  peerCommunication.startLifecycleMonitor();
   const sessionTimeline = new SessionTimelineService(eventStore);
   const projectManager = new ProjectManager(db, projectRootsEnv, repoRoot);
   const remCodexConfig = loadRemCodexConfig(configPath);
@@ -278,6 +280,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
       const closable = db as typeof db & { close?: () => void };
       closable.close?.();
     },
+    stopPeerLifecycle: () => peerCommunication.stopLifecycleMonitor(),
     port,
     repoRoot,
     databasePath,
@@ -343,6 +346,7 @@ export async function startRemCodexServer(
             reject(error);
             return;
           }
+          built.stopPeerLifecycle();
           built.closeDatabase();
           resolve();
         });

@@ -6,10 +6,10 @@ import { runMigrations } from "../server/src/db/migrations";
 import { PEER_LIMITS, PEER_SCOPES, PeerCommunicationService } from "../server/src/services/peer-communication";
 import { buildCoordinationDigest, PEER_DIGEST_LIMITS, PeerDigestScheduler } from "../server/src/services/peer-digests";
 
-function setup(): PeerCommunicationService {
+function setup(clock?: () => Date): PeerCommunicationService {
   const db = createDatabase(":memory:");
   runMigrations(db);
-  return new PeerCommunicationService(db);
+  return new PeerCommunicationService(db, clock);
 }
 
 test("peer authorization is deny-by-default and grants are directed to a work package", () => {
@@ -57,6 +57,22 @@ test("peer summaries and lifecycle dormancy are audited", () => {
   assert.deepEqual(peer.readSummary(target.token, grant.grantId), { milestone: "done", blockers: [] });
   peer.dormantSession("source-session", "completed");
   assert.throws(() => peer.publishSummary(source.token, grant.grantId, {}), /inactive or expired/);
+});
+
+test("disconnect timeout dormants inactive credentials and grants", () => {
+  let current = new Date("2026-01-01T00:00:00.000Z");
+  const peer = setup(() => current);
+  const admin = peer.authenticate(peer.issueCredential({ workerId: "admin", sessionId: "admin-session", scopes: [PEER_SCOPES.adminGrant] }).token);
+  const worker = peer.issueCredential({ workerId: "worker", sessionId: "worker-session", scopes: [PEER_SCOPES.workerMailbox] });
+  const target = peer.issueCredential({ workerId: "target", sessionId: "target-session", scopes: [PEER_SCOPES.workerMailbox] });
+  const grant = peer.grant(admin, { sourceWorkerId: "worker", targetWorkerId: "target", workPackageId: "wp-timeout", scope: PEER_SCOPES.workerMailbox });
+
+  assert.equal(peer.sweepDisconnectedCredentials(), 0);
+  current = new Date(current.getTime() + PEER_LIMITS.disconnectTimeoutMs + 1);
+  assert.equal(peer.sweepDisconnectedCredentials(), 3);
+  assert.throws(() => peer.authenticate(worker.token), /inactive or expired/);
+  assert.throws(() => peer.authenticate(target.token), /inactive or expired/);
+  assert.throws(() => peer.readMailbox(target.token, grant.grantId), /inactive or expired/);
 });
 
 test("terminal dormancy requires administrator reauthorization and a new grant", () => {
