@@ -209,6 +209,7 @@ function registerToolserver(
     "admin.peer.grant",
     "admin.peer.revoke",
     "admin.peer.audit",
+    "admin.peer.digest",
     "worker.peer.mailbox",
     "worker.peer.summary",
     "worker.peer.timeline",
@@ -333,6 +334,36 @@ function registerToolserver(
         return mcpJsonResult({ items: deps.peerCommunication.readTimeline(peerToken, grantId, limit) });
       } catch (error) {
         return mcpErrorResult("Failed to read peer timeline.", error instanceof Error ? error.message : error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "peer-read-orchestrator-digests",
+    {
+      description: "Read accepted, unacknowledged internal Orchestrator digests.",
+      inputSchema: z.object({ peerToken: z.string().min(1), limit: z.number().int().positive().optional() }),
+    },
+    async ({ peerToken, limit }) => {
+      try {
+        return mcpJsonResult({ items: deps.peerCommunication.readOrchestratorDigests(peerToken, limit) });
+      } catch (error) {
+        return mcpErrorResult("Failed to read Orchestrator digests.", error instanceof Error ? error.message : error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "peer-acknowledge-orchestrator-digest",
+    {
+      description: "Acknowledge an internal Orchestrator digest by its stable ID.",
+      inputSchema: z.object({ peerToken: z.string().min(1), digestId: z.string().min(1) }),
+    },
+    async ({ peerToken, digestId }) => {
+      try {
+        return mcpJsonResult(deps.peerCommunication.acknowledgeOrchestratorDigest(peerToken, digestId));
+      } catch (error) {
+        return mcpErrorResult("Failed to acknowledge Orchestrator digest.", error instanceof Error ? error.message : error);
       }
     },
   );

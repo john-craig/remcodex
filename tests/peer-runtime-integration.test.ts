@@ -63,6 +63,15 @@ test("REST and MCP expose scoped peer operations without widening worker authori
     const initialize = await fetch(`${baseUrl}/mcp`, { method: "POST", headers: mcpHeaders, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "1" } } }) });
     const mcpSessionId = initialize.headers.get("mcp-session-id");
     assert.ok(mcpSessionId);
+    const digestRead = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: { ...mcpHeaders, "mcp-session-id": mcpSessionId },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "peer-read-orchestrator-digests", arguments: { peerToken: "peer-admin-test-token" } } }),
+    });
+    const digestLine = (await digestRead.text()).split("\n").find((item) => item.startsWith("data: "));
+    assert.ok(digestLine);
+    const digestPayload = JSON.parse(JSON.parse(digestLine.slice("data: ".length)).result.content[0].text);
+    assert.deepEqual(digestPayload.items, []);
     const call = await fetch(`${baseUrl}/mcp`, {
       method: "POST",
       headers: { ...mcpHeaders, "mcp-session-id": mcpSessionId },

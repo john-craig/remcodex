@@ -7,8 +7,8 @@
   audit records.
 - Added isolated worker credential injection, disconnect-timeout dormancy, and
   runtime integration coverage.
-- Added bounded, non-triggering coordination digest scheduling. Delivery to an
-  external Orchestrator remains an integration boundary until its transport and
-  authentication contract is defined.
+- Added a versioned, bounded, non-triggering coordination digest contract with
+  local durable delivery, administrator-authenticated MCP read/acknowledgement,
+  idempotency, and scheduler retry behavior.
 
 Merge, publication, and deployment are separate operational steps.

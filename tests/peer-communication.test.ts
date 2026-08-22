@@ -4,7 +4,7 @@ import test from "node:test";
 import { createDatabase } from "../server/src/db/client";
 import { runMigrations } from "../server/src/db/migrations";
 import { PEER_LIMITS, PEER_SCOPES, PeerCommunicationService } from "../server/src/services/peer-communication";
-import { buildCoordinationDigest, PEER_DIGEST_LIMITS, PeerDigestScheduler } from "../server/src/services/peer-digests";
+import { buildCoordinationDigest, PEER_DIGEST_LIMITS, PeerDigestScheduler, resolveOrchestratorDigestDeliveryMode } from "../server/src/services/peer-digests";
 
 function setup(clock?: () => Date): PeerCommunicationService {
   const db = createDatabase(":memory:");
@@ -106,5 +106,42 @@ test("coordination digest scheduler batches entries on the configured cadence se
   assert.equal(await scheduler.flush() !== null, true);
   assert.equal(delivered[0].recipient, "orchestrator");
   assert.equal(await scheduler.flush(), null);
+  scheduler.stop();
+});
+
+test("internal Orchestrator digest delivery is versioned, idempotent, and administrator-acknowledged", () => {
+  const peer = setup();
+  const admin = peer.issueCredential({ workerId: "orchestrator", sessionId: "orchestrator-session", scopes: [PEER_SCOPES.adminDigest] });
+  const worker = peer.issueCredential({ workerId: "worker", sessionId: "worker-session", scopes: [PEER_SCOPES.workerDigest] });
+  const digest = buildCoordinationDigest([{ kind: "milestone", workPackageId: "wp-1", summary: "safe summary", occurredAt: new Date().toISOString() }]);
+
+  const accepted = peer.deliverOrchestratorDigest(digest);
+  assert.equal(accepted.status, "accepted");
+  assert.equal(accepted.digest.digestId, digest.digestId);
+  assert.deepEqual(peer.deliverOrchestratorDigest(digest), accepted);
+  assert.equal(peer.readOrchestratorDigests(admin.token).length, 1);
+  assert.throws(() => peer.readOrchestratorDigests(worker.token), /not authorized/);
+  const acknowledged = peer.acknowledgeOrchestratorDigest(admin.token, digest.digestId);
+  assert.equal(acknowledged.status, "acknowledged");
+  assert.equal(peer.readOrchestratorDigests(admin.token).length, 0);
+  assert.equal(peer.acknowledgeOrchestratorDigest(admin.token, digest.digestId).status, "acknowledged");
+});
+
+test("digest delivery mode is internal by default and rejects unconfigured transports", () => {
+  assert.equal(resolveOrchestratorDigestDeliveryMode(), "internal");
+  assert.equal(resolveOrchestratorDigestDeliveryMode("internal"), "internal");
+  assert.throws(() => resolveOrchestratorDigestDeliveryMode("https"), /Unsupported/);
+});
+
+test("digest scheduler retains entries for the next cadence after delivery failure", async () => {
+  let attempts = 0;
+  const scheduler = new PeerDigestScheduler(async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("temporary delivery failure");
+  });
+  scheduler.enqueue({ kind: "delivery_failure", workPackageId: "wp-retry", summary: "retryable", occurredAt: new Date().toISOString() });
+  await assert.rejects(() => scheduler.flush(), /temporary delivery failure/);
+  assert.equal(await scheduler.flush() !== null, true);
+  assert.equal(attempts, 2);
   scheduler.stop();
 });

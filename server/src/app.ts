@@ -41,6 +41,7 @@ import {
 } from "./utils/remcodex-remote-instances";
 import { resolveRemCodexPublicBaseUrl } from "./utils/remcodex-url";
 import { PeerCommunicationService } from "./services/peer-communication";
+import { PeerDigestScheduler, resolveOrchestratorDigestDeliveryMode } from "./services/peer-digests";
 import {
   defaultAgentEnvironmentRegistryPath,
   loadAgentEnvironmentRegistry,
@@ -83,6 +84,7 @@ interface BuiltRemCodexServer {
   server: http.Server;
   closeDatabase: () => void;
   stopPeerLifecycle: () => void;
+  stopDigestScheduler: () => void;
   port: number;
   repoRoot: string;
   databasePath: string;
@@ -128,7 +130,12 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
     undefined,
     process.env.REMCODEX_PEER_ADMIN_TOKEN,
   );
+  resolveOrchestratorDigestDeliveryMode(process.env.REMCODEX_ORCHESTRATOR_DIGEST_MODE);
   peerCommunication.startLifecycleMonitor();
+  const peerDigestScheduler = new PeerDigestScheduler(async (digest) => {
+    peerCommunication.deliverOrchestratorDigest(digest);
+  });
+  peerDigestScheduler.start();
   const sessionTimeline = new SessionTimelineService(eventStore);
   const projectManager = new ProjectManager(db, projectRootsEnv, repoRoot);
   const remCodexConfig = loadRemCodexConfig(configPath);
@@ -152,6 +159,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
     codexMode,
     agentEnvironmentRegistry,
     peerCommunication,
+    peerDigestScheduler,
   });
   const mcpApiToken = resolveMcpApiToken();
 
@@ -281,6 +289,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
       closable.close?.();
     },
     stopPeerLifecycle: () => peerCommunication.stopLifecycleMonitor(),
+    stopDigestScheduler: () => peerDigestScheduler.stop(),
     port,
     repoRoot,
     databasePath,
@@ -347,6 +356,7 @@ export async function startRemCodexServer(
             return;
           }
           built.stopPeerLifecycle();
+          built.stopDigestScheduler();
           built.closeDatabase();
           resolve();
         });

@@ -355,6 +355,24 @@ messages at 1,000 per grant. Credentials lease for 15 minutes unless a caller
 of the service supplies a shorter bound; expiry and explicit dormancy are
 audited and do not reactivate the old credential.
 
+### Internal Orchestrator digest delivery
+
+Coordination digests use contract version `1` and address the local
+`local-orchestrator` recipient. RemCodex delivers them to a durable internal
+SQLite queue; it does not open a public digest endpoint or make an outbound
+network request. The default and currently supported mode is
+`REMCODEX_ORCHESTRATOR_DIGEST_MODE=internal` (omitting the variable has the
+same behavior); unsupported modes fail closed at startup.
+
+Each digest has a stable `digestId`, bounded entries, and a 4 KiB serialized
+size limit. The existing authenticated MCP transport exposes
+`peer-read-orchestrator-digests` and
+`peer-acknowledge-orchestrator-digest` to an administrator credential carrying
+`admin.peer.digest`. Delivery is insert-idempotent by `digestId`; an
+acknowledgement is durable and repeatable. A scheduler delivery failure leaves
+the batch queued for the next cadence, while concurrent flushes are
+serialized. Worker credentials cannot read or acknowledge the queue.
+
 The read-only `list-sessions-by-directory` tool returns all sessions recorded
 for a working directory, including completed and failed sessions.
 
