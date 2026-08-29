@@ -23,6 +23,6 @@ repository and must remain on the protected F-Droid publishing host.
 
 The workflow expects a pinned runner label such as
 `android-34:docker://<approved-android-image>` and the pre-created
-`GITEA_RELEASE_TOKEN` Actions secret with permission to create releases and
+`REMCODEX_RELEASE_TOKEN` Actions secret with permission to create releases and
 upload release assets for this repository. It does not create or access
 signing keys.

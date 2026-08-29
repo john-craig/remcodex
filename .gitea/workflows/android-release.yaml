@@ -82,11 +82,11 @@ jobs:
           GITEA_API_URL: ${{ gitea.api_url }}
           GITEA_REPOSITORY: ${{ gitea.repository }}
           RELEASE_TAG: ${{ gitea.ref_name }}
-          GITEA_RELEASE_TOKEN: ${{ secrets.GITEA_RELEASE_TOKEN }}
+          REMCODEX_RELEASE_TOKEN: ${{ secrets.REMCODEX_RELEASE_TOKEN }}
         run: |
           set -eu
-          test -n "$GITEA_RELEASE_TOKEN"
-          auth="Authorization: token $GITEA_RELEASE_TOKEN"
+          test -n "$REMCODEX_RELEASE_TOKEN"
+          auth="Authorization: token $REMCODEX_RELEASE_TOKEN"
           release_url="$GITEA_API_URL/repos/$GITEA_REPOSITORY/releases/tags/$RELEASE_TAG"
           response=$(curl --fail --silent --show-error --header "$auth" "$release_url" || true)
           if [ -z "$response" ]; then
