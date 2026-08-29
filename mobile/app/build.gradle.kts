@@ -1,7 +1,18 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+val releaseProperties = Properties().apply {
+    file("../version.properties").inputStream().use { load(it) }
+}
+val releaseVersionName = releaseProperties.getProperty("versionName")
+    ?: error("mobile/version.properties must define versionName")
+val releaseVersionCode = releaseProperties.getProperty("versionCode")?.toIntOrNull()
+    ?.takeIf { it > 0 }
+    ?: error("mobile/version.properties must define a positive versionCode")
 
 android {
     namespace = "com.chiliahedron.remcodex"
@@ -11,12 +22,14 @@ android {
         applicationId = "com.chiliahedron.remcodex"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = releaseVersionCode
+        versionName = releaseVersionName
     }
 
     buildTypes {
         release {
+            // Release APKs are intentionally unsigned. Signing is a separate, protected F-Droid step.
+            signingConfig = null
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

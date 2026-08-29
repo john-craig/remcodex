@@ -11,5 +11,18 @@ intent extra, or launch the activity with a URL as its intent data.
 From this directory:
 
 ```text
-gradle assembleDebug
+./gradlew assembleDebug
 ```
+
+Release automation is tag-driven. Update `version.properties` together with a
+tag named `v<versionName>`; `versionCode` must increase for every published
+APK. The release variant is intentionally unsigned. Gitea Actions builds it,
+rejects signed output, and attaches the APK, SHA-256 checksum, and JSON
+manifest to the Gitea Release. Final APK/repository signing is outside this
+repository and must remain on the protected F-Droid publishing host.
+
+The workflow expects a pinned runner label such as
+`android-34:docker://<approved-android-image>` and the pre-created
+`GITEA_RELEASE_TOKEN` Actions secret with permission to create releases and
+upload release assets for this repository. It does not create or access
+signing keys.
