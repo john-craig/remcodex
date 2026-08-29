@@ -4,12 +4,12 @@ import test from "node:test";
 import { createDatabase } from "../server/src/db/client";
 import { runMigrations } from "../server/src/db/migrations";
 import { PEER_LIMITS, PEER_SCOPES, PeerCommunicationService } from "../server/src/services/peer-communication";
-import { buildCoordinationDigest, PEER_DIGEST_LIMITS } from "../server/src/services/peer-digests";
+import { buildCoordinationDigest, PEER_DIGEST_LIMITS, PeerDigestScheduler, resolveOrchestratorDigestDeliveryMode } from "../server/src/services/peer-digests";
 
-function setup(): PeerCommunicationService {
+function setup(clock?: () => Date): PeerCommunicationService {
   const db = createDatabase(":memory:");
   runMigrations(db);
-  return new PeerCommunicationService(db);
+  return new PeerCommunicationService(db, clock);
 }
 
 test("peer authorization is deny-by-default and grants are directed to a work package", () => {
@@ -59,6 +59,22 @@ test("peer summaries and lifecycle dormancy are audited", () => {
   assert.throws(() => peer.publishSummary(source.token, grant.grantId, {}), /inactive or expired/);
 });
 
+test("disconnect timeout dormants inactive credentials and grants", () => {
+  let current = new Date("2026-01-01T00:00:00.000Z");
+  const peer = setup(() => current);
+  const admin = peer.authenticate(peer.issueCredential({ workerId: "admin", sessionId: "admin-session", scopes: [PEER_SCOPES.adminGrant] }).token);
+  const worker = peer.issueCredential({ workerId: "worker", sessionId: "worker-session", scopes: [PEER_SCOPES.workerMailbox] });
+  const target = peer.issueCredential({ workerId: "target", sessionId: "target-session", scopes: [PEER_SCOPES.workerMailbox] });
+  const grant = peer.grant(admin, { sourceWorkerId: "worker", targetWorkerId: "target", workPackageId: "wp-timeout", scope: PEER_SCOPES.workerMailbox });
+
+  assert.equal(peer.sweepDisconnectedCredentials(), 0);
+  current = new Date(current.getTime() + PEER_LIMITS.disconnectTimeoutMs + 1);
+  assert.equal(peer.sweepDisconnectedCredentials(), 3);
+  assert.throws(() => peer.authenticate(worker.token), /inactive or expired/);
+  assert.throws(() => peer.authenticate(target.token), /inactive or expired/);
+  assert.throws(() => peer.readMailbox(target.token, grant.grantId), /inactive or expired/);
+});
+
 test("terminal dormancy requires administrator reauthorization and a new grant", () => {
   const peer = setup();
   const admin = peer.authenticate(peer.issueCredential({ workerId: "admin", sessionId: "admin-session", scopes: [PEER_SCOPES.adminGrant] }).token);
@@ -81,4 +97,51 @@ test("coordination digests are Orchestrator-directed, non-triggering, and bounde
   assert.equal(digest.recipient, "orchestrator");
   assert.equal(Buffer.byteLength(JSON.stringify(digest), "utf8") <= PEER_DIGEST_LIMITS.maxBytes, true);
   assert.equal(JSON.stringify(digest).includes("tool"), false);
+});
+
+test("coordination digest scheduler batches entries on the configured cadence seam", async () => {
+  const delivered: any[] = [];
+  const scheduler = new PeerDigestScheduler(async (digest) => { delivered.push(digest); }, 60_000, () => new Date("2026-01-01T00:00:00Z"));
+  scheduler.enqueue({ kind: "completion", workPackageId: "wp-1", summary: "done", occurredAt: "2026-01-01T00:00:00Z" });
+  assert.equal(await scheduler.flush() !== null, true);
+  assert.equal(delivered[0].recipient, "orchestrator");
+  assert.equal(await scheduler.flush(), null);
+  scheduler.stop();
+});
+
+test("internal Orchestrator digest delivery is versioned, idempotent, and administrator-acknowledged", () => {
+  const peer = setup();
+  const admin = peer.issueCredential({ workerId: "orchestrator", sessionId: "orchestrator-session", scopes: [PEER_SCOPES.adminDigest] });
+  const worker = peer.issueCredential({ workerId: "worker", sessionId: "worker-session", scopes: [PEER_SCOPES.workerDigest] });
+  const digest = buildCoordinationDigest([{ kind: "milestone", workPackageId: "wp-1", summary: "safe summary", occurredAt: new Date().toISOString() }]);
+
+  const accepted = peer.deliverOrchestratorDigest(digest);
+  assert.equal(accepted.status, "accepted");
+  assert.equal(accepted.digest.digestId, digest.digestId);
+  assert.deepEqual(peer.deliverOrchestratorDigest(digest), accepted);
+  assert.equal(peer.readOrchestratorDigests(admin.token).length, 1);
+  assert.throws(() => peer.readOrchestratorDigests(worker.token), /not authorized/);
+  const acknowledged = peer.acknowledgeOrchestratorDigest(admin.token, digest.digestId);
+  assert.equal(acknowledged.status, "acknowledged");
+  assert.equal(peer.readOrchestratorDigests(admin.token).length, 0);
+  assert.equal(peer.acknowledgeOrchestratorDigest(admin.token, digest.digestId).status, "acknowledged");
+});
+
+test("digest delivery mode is internal by default and rejects unconfigured transports", () => {
+  assert.equal(resolveOrchestratorDigestDeliveryMode(), "internal");
+  assert.equal(resolveOrchestratorDigestDeliveryMode("internal"), "internal");
+  assert.throws(() => resolveOrchestratorDigestDeliveryMode("https"), /Unsupported/);
+});
+
+test("digest scheduler retains entries for the next cadence after delivery failure", async () => {
+  let attempts = 0;
+  const scheduler = new PeerDigestScheduler(async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("temporary delivery failure");
+  });
+  scheduler.enqueue({ kind: "delivery_failure", workPackageId: "wp-retry", summary: "retryable", occurredAt: new Date().toISOString() });
+  await assert.rejects(() => scheduler.flush(), /temporary delivery failure/);
+  assert.equal(await scheduler.flush() !== null, true);
+  assert.equal(attempts, 2);
+  scheduler.stop();
 });

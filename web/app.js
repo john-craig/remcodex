@@ -60,6 +60,7 @@ import {
 import { renderTimeline, renderTimelineList } from "./session-timeline-renderer.js";
 import { connectSessionSocket } from "./session-ws.js";
 import { sessionMatchesSearch } from "./utils/session-search.js";
+import { hasWarmWorkspaceCache, shouldRefreshVisibleDetail } from "./utils/refresh-coordinator.js";
 import {
   buildReplySocketConnectionId,
   classifyReplyEvent,
@@ -1732,6 +1733,13 @@ const state = {
     projects: [],
     ...DEFAULT_SESSIONS_VIEW,
   },
+  runtime: {
+    uiOptions: null,
+    hosts: null,
+    profiles: null,
+    collectionsPromise: null,
+    codexStatusBySession: {},
+  },
   detail: {
     session: null,
     replyCorrelationId: "",
@@ -3386,6 +3394,44 @@ function bindWorkspaceSidebarControls(selectedSessionId = "") {
   });
 }
 
+function loadWorkspaceCollections() {
+  if (state.runtime.collectionsPromise) {
+    return state.runtime.collectionsPromise;
+  }
+
+  state.runtime.collectionsPromise = Promise.all([
+    getSessions(),
+    getProjects(),
+    getAgentEnvironments().catch(() => ({ items: [] })),
+  ])
+    .then(([sessions, projects, agentEnvironmentResult]) => {
+      state.sessions.items = Array.isArray(sessions?.items) ? sessions.items : [];
+      state.sessions.projects = Array.isArray(projects?.items) ? projects.items : [];
+      state.workspace.agentEnvironments = Array.isArray(agentEnvironmentResult?.items)
+        ? agentEnvironmentResult.items
+        : [];
+      return { sessions, projects, agentEnvironmentResult };
+    })
+    .finally(() => {
+      state.runtime.collectionsPromise = null;
+    });
+
+  return state.runtime.collectionsPromise;
+}
+
+function loadRuntimeValue(key, loader) {
+  if (state.runtime[key]) {
+    return Promise.resolve(state.runtime[key]);
+  }
+
+  return loader().then((value) => {
+    if (value) {
+      state.runtime[key] = value;
+    }
+    return value;
+  });
+}
+
 async function renderWorkspacePage(routeSessionId) {
   if (isMobileWorkspaceViewport()) {
     state.workspace.sidebarCollapsed = true;
@@ -3400,16 +3446,15 @@ async function renderWorkspacePage(routeSessionId) {
   bindWorkspaceImportDialogControls();
 
   try {
-    const [sessions, projects, agentEnvironmentResult] = await Promise.all([
-      getSessions(),
-      getProjects(),
-      getAgentEnvironments().catch(() => ({ items: [] })),
-    ]);
-    state.sessions.items = sessions.items;
-    state.sessions.projects = projects.items;
-    state.workspace.agentEnvironments = Array.isArray(agentEnvironmentResult?.items)
-      ? agentEnvironmentResult.items
-      : [];
+    if (hasWarmWorkspaceCache(state.sessions.items, state.sessions.projects)) {
+      void loadWorkspaceCollections().then(() => {
+        if (parseHashRoute(window.location.hash || "").path.startsWith("#/sessions")) {
+          patchWorkspaceSidebar(state.workspace.activeSessionId);
+        }
+      }).catch(() => null);
+    } else {
+      await loadWorkspaceCollections();
+    }
 
     const selectedSessionId = resolveWorkspaceSessionId(routeSessionId);
     state.workspace.activeSessionId = selectedSessionId;
@@ -3596,9 +3641,7 @@ async function renderSessionsPage() {
   });
 
   try {
-    const [sessions, projects] = await Promise.all([getSessions(), getProjects()]);
-    state.sessions.items = sessions.items;
-    state.sessions.projects = projects.items;
+    await loadWorkspaceCollections();
 
     renderSessionsList();
   } catch (error) {
@@ -4087,17 +4130,12 @@ async function renderSessionDetailPage(sessionId) {
   }
 
   try {
-    await syncImportedSession(normalizedSessionId).catch(() => null);
-    if (isStaleDetailLoad()) {
-      return;
-    }
-
     const [session, eventData, uiOptionsResult, hostsResult, profilesResult] = await Promise.all([
       getSession(normalizedSessionId),
       loadInitialSessionEvents(normalizedSessionId),
-      getCodexUiOptions().catch(() => null),
-      getCodexHosts().catch(() => null),
-      getProfiles().catch(() => null),
+      loadRuntimeValue("uiOptions", () => getCodexUiOptions().catch(() => null)),
+      loadRuntimeValue("hosts", () => getCodexHosts().catch(() => null)),
+      loadRuntimeValue("profiles", () => getProfiles().catch(() => null)),
     ]);
     if (isStaleDetailLoad()) {
       return;
@@ -4118,15 +4156,6 @@ async function renderSessionDetailPage(sessionId) {
       uiOptionsResult.reasoningLevels.length > 0
         ? uiOptionsResult
         : CLIENT_FALLBACK_CODEX_UI_OPTIONS;
-    const codexStatus = await getCodexStatus({
-      sessionId: normalizedSessionId,
-      threadId: session.codexThreadId || "",
-      cwd: session.projectPath || "",
-    }).catch(() => null);
-    if (isStaleDetailLoad()) {
-      return;
-    }
-
     state.detail.session = session;
     replaceDetailTimelineRawEvents(eventData.items);
     syncDetailPendingApproval(session, state.detail.timelineState);
@@ -4176,7 +4205,7 @@ async function renderSessionDetailPage(sessionId) {
     state.detail.inspectSelectionKey = "";
     state.detail.optimisticSend = null;
     state.detail.codexQuota = readCachedCodexQuota(normalizedSessionId);
-    state.detail.codexStatus = codexStatus;
+    state.detail.codexStatus = state.runtime.codexStatusBySession[normalizedSessionId] || null;
     state.socketState = "connecting";
     pushClientDebugLog("debug", "Prepared session detail state", {
       sessionId: normalizedSessionId,
@@ -4197,6 +4226,7 @@ async function renderSessionDetailPage(sessionId) {
     }
 
     attachSessionSocket(normalizedSessionId);
+    void refreshCodexStatus(normalizedSessionId);
     void catchUpSessionEvents(normalizedSessionId, state.detail.cursor)
       .then(() => {
         if (!isStaleDetailLoad()) {
@@ -4204,7 +4234,7 @@ async function renderSessionDetailPage(sessionId) {
         }
       })
       .catch(() => null);
-    scheduleImportedSessionSync(normalizedSessionId);
+    scheduleImportedSessionSync(normalizedSessionId, 0);
   } catch (error) {
     pushClientDebugLog("error", "Failed to load session detail", {
       sessionId: normalizedSessionId,
@@ -5036,6 +5066,7 @@ async function refreshCodexStatus(sessionId) {
     });
 
     if (state.detail.session && state.detail.session.sessionId === sessionId) {
+      state.runtime.codexStatusBySession[sessionId] = status;
       state.detail.codexStatus = status;
       scheduleSessionDetailRender();
     }
@@ -9147,7 +9178,7 @@ async function resumeActiveSessionDetail(reason = "resume") {
   }
 
   const now = Date.now();
-  if (now - Number(state.detail.lastResumeSyncAt || 0) < 900) {
+  if (!shouldRefreshVisibleDetail(now, state.detail.lastResumeSyncAt, 900)) {
     return;
   }
 
@@ -9178,14 +9209,15 @@ async function resumeActiveSessionDetail(reason = "resume") {
       await syncImportedSession(sessionId).catch(() => null);
     }
 
-    const refreshedSession = await getSession(sessionId).catch(() => null);
+    const [refreshedSession] = await Promise.all([
+      getSession(sessionId).catch(() => null),
+      catchUpSessionEvents(sessionId, state.detail.cursor || 0).catch(() => null),
+    ]);
     if (refreshedSession && state.detail.session?.sessionId === sessionId) {
       state.detail.session = refreshedSession;
       syncDetailPendingApproval(refreshedSession, state.detail.timelineState);
       updateSessionListItem(refreshedSession);
     }
-
-    await catchUpSessionEvents(sessionId, state.detail.cursor || 0).catch(() => null);
 
     if (state.detail.session?.sessionId === sessionId) {
       scheduleSessionDetailRender();

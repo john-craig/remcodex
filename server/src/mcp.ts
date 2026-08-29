@@ -15,6 +15,8 @@ import { normalizeCodexExecLaunchInput } from "./utils/codex-launch";
 import { buildRemCodexSessionUrl } from "./utils/remcodex-url";
 import type { RemCodexRemoteInstance } from "./utils/remcodex-remote-instances";
 import { proxyRemoteMcpCall } from "./services/remote-mcp-client";
+import type { PeerCommunicationService } from "./services/peer-communication";
+import { readPackageVersion } from "./utils/version";
 
 interface McpSessionEntry {
   transport: NodeStreamableHTTPServerTransport;
@@ -27,6 +29,7 @@ export interface RemCodexMcpDependencies {
   sessionTimeline: SessionTimelineService;
   codexRolloutSync: CodexRolloutSyncService;
   profileManager: AgentProfileManager;
+  peerCommunication: PeerCommunicationService;
 }
 
 export interface RemCodexMcpRequestOptions {
@@ -202,6 +205,169 @@ function registerToolserver(
   server: McpServer,
   deps: RemCodexMcpDependencies,
 ) {
+  const peerScope = z.enum([
+    "admin.peer.grant",
+    "admin.peer.revoke",
+    "admin.peer.audit",
+    "admin.peer.digest",
+    "worker.peer.mailbox",
+    "worker.peer.summary",
+    "worker.peer.timeline",
+    "worker.peer.digest",
+  ]);
+
+  server.registerTool(
+    "peer-issue-worker-credential",
+    {
+      description: "Issue a scoped worker credential using an administrator peer credential.",
+      inputSchema: z.object({ peerToken: z.string().min(1), workerId: z.string().min(1), sessionId: z.string().min(1), scopes: z.array(peerScope).min(1), leaseMs: z.number().int().positive().optional() }),
+    },
+    async ({ peerToken, workerId, sessionId, scopes, leaseMs }) => {
+      try {
+        return mcpJsonResult(deps.peerCommunication.issueWorkerCredential(deps.peerCommunication.authenticate(peerToken), { workerId, sessionId, scopes, leaseMs }));
+      } catch (error) {
+        return mcpErrorResult("Failed to issue worker credential.", error instanceof Error ? error.message : error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "peer-grant",
+    {
+      description: "Create an administrator-directed peer grant.",
+      inputSchema: z.object({ peerToken: z.string().min(1), sourceWorkerId: z.string().min(1), targetWorkerId: z.string().min(1), workPackageId: z.string().min(1), scope: peerScope }),
+    },
+    async ({ peerToken, sourceWorkerId, targetWorkerId, workPackageId, scope }) => {
+      try {
+        return mcpJsonResult(deps.peerCommunication.grant(deps.peerCommunication.authenticate(peerToken), { sourceWorkerId, targetWorkerId, workPackageId, scope }));
+      } catch (error) {
+        return mcpErrorResult("Failed to create peer grant.", error instanceof Error ? error.message : error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "peer-revoke",
+    {
+      description: "Revoke an administrator-directed peer grant.",
+      inputSchema: z.object({ peerToken: z.string().min(1), grantId: z.string().min(1) }),
+    },
+    async ({ peerToken, grantId }) => {
+      try {
+        deps.peerCommunication.revoke(deps.peerCommunication.authenticate(peerToken), grantId);
+        return mcpJsonResult({ revoked: true });
+      } catch (error) {
+        return mcpErrorResult("Failed to revoke peer grant.", error instanceof Error ? error.message : error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "peer-send-message",
+    {
+      description: "Append a bounded, idempotent peer message.",
+      inputSchema: z.object({ peerToken: z.string().min(1), recipientWorkerId: z.string().min(1), workPackageId: z.string().min(1), messageType: z.string().min(1), timestamp: z.string().min(1), idempotencyKey: z.string().min(8), payload: z.unknown() }),
+    },
+    async ({ peerToken, recipientWorkerId, workPackageId, messageType, timestamp, idempotencyKey, payload }) => {
+      try {
+        return mcpJsonResult(deps.peerCommunication.appendMessage(peerToken, { recipientWorkerId, workPackageId, messageType, timestamp, idempotencyKey, payload }));
+      } catch (error) {
+        return mcpErrorResult("Failed to append peer message.", error instanceof Error ? error.message : error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "peer-read-mailbox",
+    {
+      description: "Read a bounded peer mailbox page using its cursor.",
+      inputSchema: z.object({ peerToken: z.string().min(1), grantId: z.string().min(1), limit: z.number().int().positive().optional() }),
+    },
+    async ({ peerToken, grantId, limit }) => {
+      try {
+        return mcpJsonResult(deps.peerCommunication.readMailbox(peerToken, grantId, limit));
+      } catch (error) {
+        return mcpErrorResult("Failed to read peer mailbox.", error instanceof Error ? error.message : error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "peer-publish-summary",
+    {
+      description: "Publish a bounded worker summary for an authorized grant.",
+      inputSchema: z.object({ peerToken: z.string().min(1), grantId: z.string().min(1), summary: z.unknown() }),
+    },
+    async ({ peerToken, grantId, summary }) => {
+      try {
+        deps.peerCommunication.publishSummary(peerToken, grantId, summary);
+        return mcpJsonResult({ published: true });
+      } catch (error) {
+        return mcpErrorResult("Failed to publish peer summary.", error instanceof Error ? error.message : error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "peer-read-summary",
+    {
+      description: "Read the latest authorized worker summary.",
+      inputSchema: z.object({ peerToken: z.string().min(1), grantId: z.string().min(1) }),
+    },
+    async ({ peerToken, grantId }) => {
+      try {
+        return mcpJsonResult({ summary: deps.peerCommunication.readSummary(peerToken, grantId) });
+      } catch (error) {
+        return mcpErrorResult("Failed to read peer summary.", error instanceof Error ? error.message : error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "peer-read-timeline",
+    {
+      description: "Read a bounded authorized peer timeline.",
+      inputSchema: z.object({ peerToken: z.string().min(1), grantId: z.string().min(1), limit: z.number().int().positive().optional() }),
+    },
+    async ({ peerToken, grantId, limit }) => {
+      try {
+        return mcpJsonResult({ items: deps.peerCommunication.readTimeline(peerToken, grantId, limit) });
+      } catch (error) {
+        return mcpErrorResult("Failed to read peer timeline.", error instanceof Error ? error.message : error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "peer-read-orchestrator-digests",
+    {
+      description: "Read accepted, unacknowledged internal Orchestrator digests.",
+      inputSchema: z.object({ peerToken: z.string().min(1), limit: z.number().int().positive().optional() }),
+    },
+    async ({ peerToken, limit }) => {
+      try {
+        return mcpJsonResult({ items: deps.peerCommunication.readOrchestratorDigests(peerToken, limit) });
+      } catch (error) {
+        return mcpErrorResult("Failed to read Orchestrator digests.", error instanceof Error ? error.message : error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "peer-acknowledge-orchestrator-digest",
+    {
+      description: "Acknowledge an internal Orchestrator digest by its stable ID.",
+      inputSchema: z.object({ peerToken: z.string().min(1), digestId: z.string().min(1) }),
+    },
+    async ({ peerToken, digestId }) => {
+      try {
+        return mcpJsonResult(deps.peerCommunication.acknowledgeOrchestratorDigest(peerToken, digestId));
+      } catch (error) {
+        return mcpErrorResult("Failed to acknowledge Orchestrator digest.", error instanceof Error ? error.message : error);
+      }
+    },
+  );
+
   server.registerTool(
     "list-profiles",
     {
@@ -607,7 +773,7 @@ function registerToolserver(
 function buildMcpServer(deps: RemCodexMcpDependencies) {
   const server = new McpServer({
     name: "remcodex",
-    version: "0.1.0-beta.12",
+    version: readPackageVersion(),
   });
 
   registerToolserver(server, deps);

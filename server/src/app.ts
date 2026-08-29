@@ -9,6 +9,7 @@ import { createMessageRouter } from "./controllers/message.controller";
 import { createProjectRouter } from "./controllers/project.controller";
 import { createSessionRouter } from "./controllers/session.controller";
 import { createProfileRouter } from "./controllers/profile.controller";
+import { createPeerRouter } from "./controllers/peer.controller";
 import { handleRemCodexMcpRequest } from "./mcp";
 import { createDatabase } from "./db/client";
 import { runMigrations } from "./db/migrations";
@@ -39,6 +40,8 @@ import {
   type RemCodexRemoteInstance,
 } from "./utils/remcodex-remote-instances";
 import { resolveRemCodexPublicBaseUrl } from "./utils/remcodex-url";
+import { PeerCommunicationService } from "./services/peer-communication";
+import { PeerDigestScheduler, resolveOrchestratorDigestDeliveryMode } from "./services/peer-digests";
 import {
   defaultAgentEnvironmentRegistryPath,
   loadAgentEnvironmentRegistry,
@@ -80,6 +83,8 @@ interface BuiltRemCodexServer {
   app: express.Express;
   server: http.Server;
   closeDatabase: () => void;
+  stopPeerLifecycle: () => void;
+  stopDigestScheduler: () => void;
   port: number;
   repoRoot: string;
   databasePath: string;
@@ -120,6 +125,17 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
   runMigrations(db);
 
   const eventStore = new EventStore(db);
+  const peerCommunication = new PeerCommunicationService(
+    db,
+    undefined,
+    process.env.REMCODEX_PEER_ADMIN_TOKEN,
+  );
+  resolveOrchestratorDigestDeliveryMode(process.env.REMCODEX_ORCHESTRATOR_DIGEST_MODE);
+  peerCommunication.startLifecycleMonitor();
+  const peerDigestScheduler = new PeerDigestScheduler(async (digest) => {
+    peerCommunication.deliverOrchestratorDigest(digest);
+  });
+  peerDigestScheduler.start();
   const sessionTimeline = new SessionTimelineService(eventStore);
   const projectManager = new ProjectManager(db, projectRootsEnv, repoRoot);
   const remCodexConfig = loadRemCodexConfig(configPath);
@@ -142,6 +158,8 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
     codexCommand,
     codexMode,
     agentEnvironmentRegistry,
+    peerCommunication,
+    peerDigestScheduler,
   });
   const mcpApiToken = resolveMcpApiToken();
 
@@ -178,6 +196,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
 
   app.use("/api/projects", createProjectRouter(projectManager));
   app.use("/api/profiles", createProfileRouter(profileManager));
+  app.use("/api/peer", createPeerRouter(peerCommunication));
   app.use(
     "/api/codex",
     createCodexOptionsRouter({
@@ -215,6 +234,7 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
             sessionTimeline,
             codexRolloutSync,
             profileManager,
+            peerCommunication,
           },
           {
             apiToken: mcpApiToken,
@@ -268,6 +288,8 @@ function buildRemCodexServer(options: RemCodexServerOptions = {}): BuiltRemCodex
       const closable = db as typeof db & { close?: () => void };
       closable.close?.();
     },
+    stopPeerLifecycle: () => peerCommunication.stopLifecycleMonitor(),
+    stopDigestScheduler: () => peerDigestScheduler.stop(),
     port,
     repoRoot,
     databasePath,
@@ -333,6 +355,8 @@ export async function startRemCodexServer(
             reject(error);
             return;
           }
+          built.stopPeerLifecycle();
+          built.stopDigestScheduler();
           built.closeDatabase();
           resolve();
         });

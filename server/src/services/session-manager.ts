@@ -41,6 +41,8 @@ import {
 } from "./codex-stream-events";
 import { EventStore } from "./event-store";
 import { ProjectManager } from "./project-manager";
+import type { PeerCommunicationService } from "./peer-communication";
+import type { PeerDigestScheduler } from "./peer-digests";
 
 interface MessageRuntimeState {
   messageId: string;
@@ -115,6 +117,8 @@ interface SessionManagerOptions {
   codexCommand: string;
   codexMode: CodexExecutionMode;
   agentEnvironmentRegistry?: AgentEnvironmentRegistry;
+  peerCommunication?: PeerCommunicationService;
+  peerDigestScheduler?: PeerDigestScheduler;
 }
 
 const EMPTY_AGENT_ENVIRONMENT_REGISTRY: AgentEnvironmentRegistry = {
@@ -796,6 +800,11 @@ export class SessionManager {
       session.agent_environment
         ? resolveAgentEnvironment(this.options.agentEnvironmentRegistry ?? EMPTY_AGENT_ENVIRONMENT_REGISTRY, session.agent_environment)?.codexHome
         : null,
+      this.options.peerCommunication?.issueCredential({
+        workerId: `session:${session.id}`,
+        sessionId: session.id,
+        scopes: ["worker.peer.mailbox", "worker.peer.summary", "worker.peer.timeline", "worker.peer.digest"],
+      }).token,
     );
     const effectiveLaunch = this.withSessionWritableRoots(sessionId, codexLaunch);
     const runtime: RunnerState = {
@@ -1274,6 +1283,12 @@ export class SessionManager {
 
     if (exitCode === 0) {
       this.advanceImportedRolloutCursorToCurrentEnd(sessionId, runtime.turnFinalized);
+      this.options.peerDigestScheduler?.enqueue({
+        kind: "completion",
+        workPackageId: sessionId,
+        summary: "session runner completed",
+        occurredAt: nowIso(),
+      });
       if (this.getSession(sessionId)?.status !== "failed") {
         this.setStatus(sessionId, "waiting_input");
       }
@@ -1282,6 +1297,13 @@ export class SessionManager {
 
     this.advanceImportedRolloutCursorToCurrentEnd(sessionId, runtime.turnFinalized);
     this.setStatus(sessionId, "failed");
+    this.options.peerDigestScheduler?.enqueue({
+      kind: "delivery_failure",
+      workPackageId: sessionId,
+      summary: "session runner failed",
+      occurredAt: nowIso(),
+    });
+    this.options.peerCommunication?.dormantSession(sessionId, "failed");
   }
 
   private advanceImportedRolloutCursorToCurrentEnd(

@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS peer_credentials (
   scopes_json TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active',
   lease_expires_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   dormant_at TEXT
 );
@@ -130,5 +131,18 @@ CREATE TABLE IF NOT EXISTS peer_audit_events (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+CREATE TABLE IF NOT EXISTS peer_orchestrator_digests (
+  digest_id TEXT PRIMARY KEY,
+  version INTEGER NOT NULL,
+  recipient_id TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'accepted',
+  attempts INTEGER NOT NULL DEFAULT 1,
+  last_attempt_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  acknowledged_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_peer_messages_grant_created ON peer_messages(grant_id, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_peer_audit_created ON peer_audit_events(created_at, id);
+CREATE INDEX IF NOT EXISTS idx_peer_orchestrator_digests_status ON peer_orchestrator_digests(status, created_at);

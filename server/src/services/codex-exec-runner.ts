@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 import type { CodexExecLaunchInput } from "../types/codex-launch";
-import type { CodexRunner } from "./codex-runner";
+import { buildCodexChildEnvironment, type CodexRunner } from "./codex-runner";
 import { buildCodexMcpToolPolicyOverrides } from "../utils/codex-launch";
 
 export interface CodexJsonEvent {
@@ -37,6 +37,7 @@ export class CodexExecRunner implements CodexRunner {
     private readonly command: string,
     private readonly cwd: string,
     private readonly codexHome?: string | null,
+    private readonly peerCredential?: string | null,
   ) {}
 
   start(prompt: string, threadId?: string | null, launch?: CodexExecLaunchInput): number {
@@ -44,10 +45,7 @@ export class CodexExecRunner implements CodexRunner {
 
     this.process = spawn(this.command, args, {
       cwd: this.cwd,
-      env: {
-        ...process.env,
-        ...(this.codexHome ? { CODEX_HOME: this.codexHome } : {}),
-      },
+      env: buildCodexChildEnvironment(this.codexHome, this.peerCredential),
       stdio: "pipe",
     });
 

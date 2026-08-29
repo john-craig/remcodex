@@ -20,6 +20,19 @@ export interface CodexHomePolicy {
   fixedByRemoteServer: boolean;
 }
 
+export function buildCodexChildEnvironment(
+  codexHome?: string | null,
+  peerCredential?: string | null,
+): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.REMCODEX_PEER_ADMIN_TOKEN;
+  delete env.REMCODEX_MCP_API_TOKEN;
+  delete env.REMCODEX_PEER_TOKEN;
+  if (codexHome) env.CODEX_HOME = codexHome;
+  if (peerCredential) env.REMCODEX_PEER_TOKEN = peerCredential;
+  return env;
+}
+
 /** Remote app servers own their Codex home; never apply the local session home to them. */
 export function resolveCodexHomePolicy(
   mode: CodexExecutionMode,
@@ -39,14 +52,15 @@ export function createCodexRunner(
   cwd: string,
   appServerEndpoint?: string | null,
   codexHome?: string | null,
+  peerCredential?: string | null,
 ): CodexRunner {
   const homePolicy = resolveCodexHomePolicy(mode, appServerEndpoint, codexHome);
   if (mode === "app-server") {
     if (appServerEndpoint) {
       return new CodexRemoteAppServerRunner(appServerEndpoint, cwd);
     }
-    return new CodexAppServerRunner(command, cwd, homePolicy.codexHome);
+    return new CodexAppServerRunner(command, cwd, homePolicy.codexHome, peerCredential);
   }
 
-  return new CodexExecRunner(command, cwd, homePolicy.codexHome);
+  return new CodexExecRunner(command, cwd, homePolicy.codexHome, peerCredential);
 }

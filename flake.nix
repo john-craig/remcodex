@@ -41,7 +41,7 @@
         '';
         remcodex = pkgs.buildNpmPackage rec {
           pname = "remcodex";
-          version = "0.1.0-beta.12";
+          version = "0.1.0-beta.13";
           src = self;
 
           inherit nodejs;

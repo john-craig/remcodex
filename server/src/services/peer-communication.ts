@@ -2,11 +2,14 @@ import crypto from "node:crypto";
 
 import type { DatabaseClient } from "../db/client";
 import { AppError } from "../utils/errors";
+import type { CoordinationDigest } from "./peer-digests";
+import { ORCHESTRATOR_DIGEST_VERSION, ORCHESTRATOR_RECIPIENT_ID, PEER_DIGEST_LIMITS } from "./peer-digests";
 
 export const PEER_SCOPES = {
   adminGrant: "admin.peer.grant",
   adminRevoke: "admin.peer.revoke",
   adminAudit: "admin.peer.audit",
+  adminDigest: "admin.peer.digest",
   workerMailbox: "worker.peer.mailbox",
   workerSummary: "worker.peer.summary",
   workerTimeline: "worker.peer.timeline",
@@ -21,6 +24,7 @@ export const PEER_LIMITS = Object.freeze({
   maxStoredMessagesPerGrant: 1_000,
   maxSummaryBytes: 8 * 1024,
   leaseMs: 15 * 60 * 1_000,
+  disconnectTimeoutMs: 2 * 60 * 1_000,
 });
 
 type StoredCredential = {
@@ -30,6 +34,7 @@ type StoredCredential = {
   scopes_json: string;
   status: "active" | "dormant";
   lease_expires_at: string;
+  last_seen_at: string;
 };
 
 type Actor = StoredCredential & { scopes: Set<string> };
@@ -49,6 +54,17 @@ export interface PeerEnvelope extends PeerEnvelopeInput {
   createdAt: string;
 }
 
+export interface OrchestratorDigestDelivery {
+  digestId: string;
+  version: number;
+  recipientId: string;
+  status: "accepted" | "acknowledged";
+  attempts: number;
+  createdAt: string;
+  acknowledgedAt: string | null;
+  digest: CoordinationDigest;
+}
+
 function id(prefix: string): string {
   return `${prefix}_${crypto.randomUUID()}`;
 }
@@ -66,7 +82,23 @@ function jsonBytes(value: unknown): number {
 }
 
 export class PeerCommunicationService {
-  constructor(private readonly db: DatabaseClient, private readonly clock: () => Date = () => new Date()) {}
+  private lifecycleTimer: NodeJS.Timeout | null = null;
+
+  constructor(
+    private readonly db: DatabaseClient,
+    private readonly clock: () => Date = () => new Date(),
+    adminToken?: string,
+  ) {
+    if (adminToken?.trim()) {
+      const token = adminToken.trim();
+      this.db.prepare(`INSERT OR IGNORE INTO peer_credentials (id, worker_id, session_id, token_hash, scopes_json, lease_expires_at, last_seen_at) VALUES ('peer-admin', 'administrator', 'server', ?, ?, ?, ?)`).run(
+        hashToken(token),
+        JSON.stringify([PEER_SCOPES.adminGrant, PEER_SCOPES.adminRevoke, PEER_SCOPES.adminAudit, PEER_SCOPES.adminDigest]),
+        new Date(this.clock().getTime() + 365 * 24 * 60 * 60 * 1_000).toISOString(),
+        this.clock().toISOString(),
+      );
+    }
+  }
 
   issueCredential(input: { workerId: string; sessionId: string; scopes: PeerScope[]; leaseMs?: number }): { credentialId: string; token: string } {
     if (!input.workerId.trim() || !input.sessionId.trim()) throw new AppError(400, "Worker and session identity are required.");
@@ -82,10 +114,17 @@ export class PeerCommunicationService {
     const token = `peer_${crypto.randomBytes(32).toString("base64url")}`;
     const credentialId = id("cred");
     const expires = new Date(this.clock().getTime() + (input.leaseMs ?? PEER_LIMITS.leaseMs)).toISOString();
-    this.db.prepare(`INSERT INTO peer_credentials (id, worker_id, session_id, token_hash, scopes_json, lease_expires_at) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(credentialId, input.workerId, input.sessionId, hashToken(token), JSON.stringify(scopes), expires);
+    this.db.prepare(`INSERT INTO peer_credentials (id, worker_id, session_id, token_hash, scopes_json, lease_expires_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(credentialId, input.workerId, input.sessionId, hashToken(token), JSON.stringify(scopes), expires, this.clock().toISOString());
     this.audit("credential.issued", input.workerId, credentialId, { scopes, sessionId: input.sessionId });
     return { credentialId, token };
+  }
+
+  issueWorkerCredential(actor: Actor, input: { workerId: string; sessionId: string; scopes: PeerScope[]; leaseMs?: number }): { credentialId: string; token: string } {
+    this.require(actor, PEER_SCOPES.adminGrant);
+    const credential = this.issueCredential(input);
+    this.audit("credential.issued_by_admin", actor.worker_id, credential.credentialId, { workerId: input.workerId, sessionId: input.sessionId });
+    return credential;
   }
 
   authenticate(token: string): Actor {
@@ -98,7 +137,29 @@ export class PeerCommunicationService {
       this.audit("credential.dormant", row.worker_id, row.id, { reason: "lease_expired" });
       throw new AppError(403, "Peer credential is inactive or expired.");
     }
+    this.db.prepare(`UPDATE peer_credentials SET last_seen_at = ? WHERE id = ? AND status = 'active'`).run(this.clock().toISOString(), row.id);
     return { ...row, scopes: new Set(JSON.parse(row.scopes_json) as string[]) };
+  }
+
+  sweepDisconnectedCredentials(): number {
+    const cutoff = this.clock().getTime() - PEER_LIMITS.disconnectTimeoutMs;
+    const rows = this.db.prepare(`SELECT id, session_id FROM peer_credentials WHERE status = 'active' AND session_id != 'server' AND (last_seen_at = '' OR last_seen_at < ? OR lease_expires_at <= ?)`).all(new Date(cutoff).toISOString(), this.clock().toISOString()) as Array<{ id: string; session_id: string }>;
+    for (const row of rows) this.dormantSession(row.session_id, "disconnect_timeout_or_lease_expiry");
+    return rows.length;
+  }
+
+  startLifecycleMonitor(intervalMs = 30_000): void {
+    if (this.lifecycleTimer) return;
+    this.lifecycleTimer = setInterval(() => {
+      this.sweepDisconnectedCredentials();
+    }, intervalMs);
+    this.lifecycleTimer.unref();
+  }
+
+  stopLifecycleMonitor(): void {
+    if (!this.lifecycleTimer) return;
+    clearInterval(this.lifecycleTimer);
+    this.lifecycleTimer = null;
   }
 
   grant(actor: Actor, input: { sourceWorkerId: string; targetWorkerId: string; workPackageId: string; scope: PeerScope }): { grantId: string } {
@@ -144,7 +205,7 @@ export class PeerCommunicationService {
     return { ...input, id: messageId, senderWorkerId: actor.worker_id, createdAt: now() };
   }
 
-  readMailbox(token: string, grantId: string, limit = PEER_LIMITS.maxMessagesPerRead): { messages: PeerEnvelope[]; nextCursor: string | null } {
+  readMailbox(token: string, grantId: string, limit: number = PEER_LIMITS.maxMessagesPerRead): { messages: PeerEnvelope[]; nextCursor: string | null } {
     const actor = this.authenticate(token);
     this.require(actor, PEER_SCOPES.workerMailbox);
     const grant = this.authorizedGrant(actor, undefined, undefined, PEER_SCOPES.workerMailbox, grantId, true);
@@ -182,7 +243,7 @@ export class PeerCommunicationService {
     return row ? JSON.parse(row.summary_json) : null;
   }
 
-  readTimeline(token: string, grantId: string, limit = PEER_LIMITS.maxTimelineEntries): PeerEnvelope[] {
+  readTimeline(token: string, grantId: string, limit: number = PEER_LIMITS.maxTimelineEntries): PeerEnvelope[] {
     const actor = this.authenticate(token);
     this.require(actor, PEER_SCOPES.workerTimeline);
     const grant = this.authorizedGrant(actor, undefined, undefined, PEER_SCOPES.workerTimeline, grantId, true);
@@ -190,6 +251,47 @@ export class PeerCommunicationService {
     const rows = this.db.prepare(`SELECT * FROM peer_messages WHERE grant_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`).all(grant.id, safeLimit) as Array<Record<string, unknown>>;
     this.audit("timeline.read", actor.worker_id, grant.id, { limit: safeLimit });
     return rows.reverse().map((row) => this.deserializeMessage(row));
+  }
+
+  deliverOrchestratorDigest(digest: CoordinationDigest): OrchestratorDigestDelivery {
+    if (digest.version !== ORCHESTRATOR_DIGEST_VERSION || digest.recipientId !== ORCHESTRATOR_RECIPIENT_ID) {
+      throw new AppError(400, "Orchestrator digest contract is invalid.");
+    }
+    if (Buffer.byteLength(JSON.stringify(digest), "utf8") > PEER_DIGEST_LIMITS.maxBytes) {
+      throw new AppError(413, "Orchestrator digest exceeds the configured bound.");
+    }
+    const existing = this.db.prepare(`SELECT * FROM peer_orchestrator_digests WHERE digest_id = ?`).get(digest.digestId) as Record<string, unknown> | undefined;
+    if (existing) return this.deserializeDigestDelivery(existing);
+    const timestamp = this.clock().toISOString();
+    this.db.prepare(`INSERT INTO peer_orchestrator_digests (digest_id, version, recipient_id, payload_json, status, attempts, last_attempt_at) VALUES (?, ?, ?, ?, 'accepted', 1, ?)`).run(
+      digest.digestId,
+      digest.version,
+      digest.recipientId,
+      JSON.stringify(digest),
+      timestamp,
+    );
+    this.audit("digest.accepted", null, digest.digestId, { recipientId: digest.recipientId, entryCount: digest.entries.length });
+    return this.deserializeDigestDelivery(this.db.prepare(`SELECT * FROM peer_orchestrator_digests WHERE digest_id = ?`).get(digest.digestId) as Record<string, unknown>);
+  }
+
+  readOrchestratorDigests(token: string, limit = 100): OrchestratorDigestDelivery[] {
+    const actor = this.authenticate(token);
+    this.require(actor, PEER_SCOPES.adminDigest);
+    const safeLimit = Math.min(Math.max(1, Math.floor(limit)), 100);
+    const rows = this.db.prepare(`SELECT * FROM peer_orchestrator_digests WHERE status != 'acknowledged' ORDER BY created_at, digest_id LIMIT ?`).all(safeLimit) as Array<Record<string, unknown>>;
+    this.audit("digest.read", actor.worker_id, null, { count: rows.length, limit: safeLimit });
+    return rows.map((row) => this.deserializeDigestDelivery(row));
+  }
+
+  acknowledgeOrchestratorDigest(token: string, digestId: string): OrchestratorDigestDelivery {
+    const actor = this.authenticate(token);
+    this.require(actor, PEER_SCOPES.adminDigest);
+    const timestamp = this.clock().toISOString();
+    const result = this.db.prepare(`UPDATE peer_orchestrator_digests SET status = 'acknowledged', acknowledged_at = ? WHERE digest_id = ? AND status != 'acknowledged'`).run(timestamp, digestId) as { changes: number };
+    const row = this.db.prepare(`SELECT * FROM peer_orchestrator_digests WHERE digest_id = ?`).get(digestId) as Record<string, unknown> | undefined;
+    if (!row) throw new AppError(404, "Orchestrator digest not found.");
+    if (result.changes) this.audit("digest.acknowledged", actor.worker_id, digestId, {});
+    return this.deserializeDigestDelivery(row);
   }
 
   dormantSession(sessionId: string, reason: string): void {
@@ -242,6 +344,19 @@ export class PeerCommunicationService {
       idempotencyKey: String(row.idempotency_key),
       payload: JSON.parse(String(row.payload_json)),
       createdAt: String(row.created_at),
+    };
+  }
+
+  private deserializeDigestDelivery(row: Record<string, unknown>): OrchestratorDigestDelivery {
+    return {
+      digestId: String(row.digest_id),
+      version: Number(row.version),
+      recipientId: String(row.recipient_id),
+      status: row.status === "acknowledged" ? "acknowledged" : "accepted",
+      attempts: Number(row.attempts),
+      createdAt: String(row.created_at),
+      acknowledgedAt: row.acknowledged_at ? String(row.acknowledged_at) : null,
+      digest: JSON.parse(String(row.payload_json)) as CoordinationDigest,
     };
   }
 
